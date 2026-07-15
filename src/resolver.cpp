@@ -71,9 +71,17 @@ void ParseMedium(const std::wstring& unique, KeyMedium* medium,
                                               : unique.substr(start, end - start);
         return;
     }
-    if (_wcsicmp(head.c_str(), L"HDIMAGE") == 0) {
-        *medium = KeyMedium::FileToken;
-        *reader = L"диск";
+    // FAT12 - контейнер-папка на сменном/диске (флоппи-профиль), HDIMAGE -
+    // на жёстком диске. Оба файловые, копируются как папка, но не через скан
+    // токена, поэтому отдельный тип (RefineMediumByScan их не трогает).
+    if (_wcsicmp(head.c_str(), L"FAT12") == 0 ||
+        _wcsicmp(head.c_str(), L"HDIMAGE") == 0) {
+        *medium = KeyMedium::DiskFile;
+        // Носитель - 2-й сегмент (напр. 749ED929_ecp или имя диска).
+        size_t start = sep + 1;
+        size_t end = unique.find(L'\\', start);
+        *reader = (end == std::wstring::npos) ? unique.substr(start)
+                                              : unique.substr(start, end - start);
         return;
     }
     *reader = head;
@@ -231,8 +239,14 @@ bool ResolveOne(const ProviderType& pt, const std::wstring& contName,
     info->provType = pt.type;
     info->provName = pt.title;
 
+    // CRYPT_SILENT обязателен: инвентаризация не должна показывать GUI-запрос
+    // PIN. Без него открытие контейнера, требующего аутентификации, вешает
+    // весь процесс на невидимом диалоге. С флагом такие операции честно
+    // падают (NTE_SILENT_CONTEXT), а не блокируют. Чтение сертификата -
+    // операция публичная и PIN не требует.
     HCRYPTPROV prov = 0;
-    if (!CryptAcquireContextW(&prov, contName.c_str(), pt.name, pt.type, 0)) {
+    if (!CryptAcquireContextW(&prov, contName.c_str(), pt.name, pt.type,
+                              CRYPT_SILENT)) {
         info->error = L"CryptAcquireContext: " + LastErrorText(GetLastError());
         return true;
     }

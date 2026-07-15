@@ -1,0 +1,434 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+  <link rel="stylesheet" href="_ds/nocturne-157e783a-a620-454a-bd4d-d118bdfe4fed/styles.css">
+  <script src="_ds/nocturne-157e783a-a620-454a-bd4d-d118bdfe4fed/_ds_bundle.js"></script>
+  <style>
+    @keyframes tui-blink { 0%, 49% { opacity: 1; } 50%, 100% { opacity: 0; } }
+    body { margin: 0; }
+  </style>
+</helmet>
+<div style="min-height: 100vh; display: flex; align-items: center; justify-content: center; background: var(--color-bg); font-family: 'JetBrains Mono', 'SFMono-Regular', Consolas, 'Liberation Mono', monospace; padding: 24px;" tabIndex="0">
+  <div style="position: relative; width: min(940px, calc(100vw - 48px)); height: min(660px, calc(100vh - 48px)); display: flex; flex-direction: column; background: var(--color-surface); border: 3px double var(--color-accent-600); border-radius: var(--radius-md); box-shadow: var(--shadow-lg); overflow: hidden;">
+    <div style="position: absolute; top: -11px; left: 20px; background: var(--color-surface); padding: 0 10px; font-size: 12px; letter-spacing: 0.06em; color: var(--color-accent-200); text-transform: uppercase;">Диспетчер сертификатов — токены и ключи<span style="animation: tui-blink 1s steps(1) infinite; margin-left: 4px;">▮</span></div>
+
+    <div style="display: flex; align-items: center; justify-content: space-between; padding: 16px 20px 10px;">
+      <div style="font-size: 13px; color: var(--color-neutral-300);">{{ breadcrumb }}</div>
+      <div style="display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--color-neutral-400);">
+        <span style="width: 7px; height: 7px; border-radius: 50%; background: var(--color-accent-400); display: inline-block;"></span>
+        {{ tokensConnectedLabel }}
+      </div>
+    </div>
+    <div class="hr" style="margin: 0 20px;"></div>
+
+    <div style="flex: 1; min-height: 0; overflow-y: auto; padding: 10px 14px;">
+
+      <sc-if value="{{ isTokensScreen }}" hint-placeholder-val="{{ true }}">
+        <sc-for list="{{ tokensView }}" as="tok" hint-placeholder-count="4">
+          <div onClick="{{ tok.onClick }}" style="display: grid; grid-template-columns: 30px 1fr auto; align-items: center; gap: 10px; padding: 10px 12px; border-radius: var(--radius-sm); cursor: pointer; background: {{ tok.bg }}; color: {{ tok.color }};">
+            <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"><rect x="9" y="2.5" width="6" height="5" rx="1"></rect><rect x="4" y="7.5" width="16" height="14" rx="2.5"></rect><path d="M8 13.5h8M8 17h5"></path></svg>
+            <div>
+              <div style="font-size: 14px;">{{ tok.name }} <span style="opacity: .6; font-size: 12px;">— {{ tok.model }}</span></div>
+              <div style="font-size: 11.5px; color: {{ tok.metaColor }}; margin-top: 2px;">Считыватель: {{ tok.reader }} · S/N {{ tok.serial }} · сертификатов: {{ tok.certCount }}</div>
+            </div>
+            <sc-if value="{{ tok.readOnly }}" hint-placeholder-val="{{ false }}">
+              <span class="tag tag-outline">только чтение</span>
+            </sc-if>
+          </div>
+        </sc-for>
+      </sc-if>
+
+      <sc-if value="{{ isCertsScreen }}" hint-placeholder-val="{{ false }}">
+        <sc-if value="{{ hasCerts }}" hint-placeholder-val="{{ true }}">
+          <sc-for list="{{ certsView }}" as="c" hint-placeholder-count="2">
+            <div onClick="{{ c.onClick }}" style="display: grid; grid-template-columns: 26px 1fr auto; align-items: center; gap: 10px; padding: 10px 12px; border-radius: var(--radius-sm); cursor: pointer; background: {{ c.bg }}; color: {{ c.color }};">
+              <sc-if value="{{ c.locked }}" hint-placeholder-val="{{ false }}">
+                <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"><rect x="5" y="11" width="14" height="9" rx="2"></rect><path d="M8 11V8a4 4 0 0 1 8 0v3"></path></svg>
+              </sc-if>
+              <sc-if value="{{ c.notLocked }}" hint-placeholder-val="{{ true }}">
+                <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"><path d="M7 3.5h7l3.5 3.5V20.5h-10.5z"></path><path d="M14 3.5V7h3.5"></path><path d="M9 13h6M9 16h6"></path></svg>
+              </sc-if>
+              <div>
+                <div style="font-size: 14px;">{{ c.owner }}</div>
+                <div style="font-size: 11.5px; color: {{ c.metaColor }}; margin-top: 2px;">{{ c.issuer }} · Действителен: {{ c.validFrom }}–{{ c.validTo }} · Отпечаток: {{ c.thumb }}</div>
+              </div>
+              <sc-if value="{{ c.locked }}" hint-placeholder-val="{{ false }}">
+                <span class="tag tag-outline">{{ c.lockLabel }}</span>
+              </sc-if>
+            </div>
+          </sc-for>
+        </sc-if>
+        <sc-if value="{{ noCerts }}" hint-placeholder-val="{{ false }}">
+          <div style="padding: 40px 12px; text-align: center; color: var(--color-neutral-500); font-size: 13px;">На этом носителе не найдено сертификатов.</div>
+        </sc-if>
+      </sc-if>
+
+      <sc-if value="{{ isProgressScreen }}" hint-placeholder-val="{{ false }}">
+        <div style="display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100%; gap: 18px; padding: 40px;">
+          <div style="font-size: 14px; color: var(--color-neutral-200);">Копирование сертификата «{{ progressOwner }}» → {{ progressDest }}…</div>
+          <div style="width: 420px; height: 14px; border: 1px solid var(--color-divider); border-radius: var(--radius-sm); overflow: hidden; background: var(--color-neutral-900);">
+            <div style="height: 100%; background: var(--color-accent-500); width: {{ progressWidth }}; transition: width .12s linear;"></div>
+          </div>
+          <div style="font-size: 12px; color: var(--color-neutral-500);">{{ progressPct }}%</div>
+        </div>
+      </sc-if>
+
+      <sc-if value="{{ isResultScreen }}" hint-placeholder-val="{{ false }}">
+        <div style="display: flex; flex-direction: column; gap: 16px; padding: 6px 8px;">
+          <div style="display: flex; align-items: center; gap: 12px; padding: 14px 16px; border-radius: var(--radius-md); background: var(--color-neutral-900); border: 1px solid var(--color-divider);">
+            <sc-if value="{{ lastOk }}" hint-placeholder-val="{{ true }}">
+              <svg viewBox="0 0 24 24" width="26" height="26" fill="none" stroke="var(--color-accent-300)" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="9"></circle><path d="M8 12.5l2.5 2.5L16 9.5"></path></svg>
+            </sc-if>
+            <sc-if value="{{ lastErr }}" hint-placeholder-val="{{ false }}">
+              <svg viewBox="0 0 24 24" width="26" height="26" fill="none" stroke="var(--color-neutral-300)" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="9"></circle><path d="M9 9l6 6M15 9l-6 6"></path></svg>
+            </sc-if>
+            <div>
+              <div style="font-size: 14px; color: var(--color-text);">{{ lastMessage }}</div>
+              <div style="font-size: 11.5px; color: var(--color-neutral-500); margin-top: 2px;">{{ lastMeta }}</div>
+            </div>
+          </div>
+
+          <div>
+            <div style="font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--color-neutral-500); margin-bottom: 6px;">Журнал операций сеанса</div>
+            <table class="table">
+              <thead><tr><th>Время</th><th>Токен</th><th>Владелец</th><th>Назначение</th><th>Статус</th></tr></thead>
+              <tbody>
+                <sc-for list="{{ logView }}" as="l" hint-placeholder-count="1">
+                  <tr>
+                    <td style="font-size: 12px;">{{ l.ts }}</td>
+                    <td style="font-size: 12px;">{{ l.tokenName }}</td>
+                    <td style="font-size: 12px;">{{ l.owner }}</td>
+                    <td style="font-size: 12px;">{{ l.dest }}</td>
+                    <td><span class="{{ l.tagClass }}">{{ l.statusLabel }}</span></td>
+                  </tr>
+                </sc-for>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </sc-if>
+
+    </div>
+
+    <div style="display: flex; gap: 4px; padding: 9px 14px; border-top: 1px solid var(--color-divider); background: var(--color-neutral-900); flex-wrap: wrap;">
+      <sc-for list="{{ footerKeys }}" as="fk" hint-placeholder-count="4">
+        <div onClick="{{ fk.onClick }}" style="display: flex; align-items: center; gap: 6px; cursor: pointer; padding: 4px 8px; border-radius: var(--radius-sm); opacity: {{ fk.opacity }};">
+          <span style="background: var(--color-accent-800); color: var(--color-accent-100); font-size: 11px; padding: 1px 7px; border-radius: 3px;">{{ fk.key }}</span>
+          <span style="font-size: 12px; color: var(--color-neutral-300);">{{ fk.label }}</span>
+        </div>
+      </sc-for>
+    </div>
+  </div>
+
+  <sc-if value="{{ hasModal }}" hint-placeholder-val="{{ false }}">
+    <div class="dialog-backdrop" onClick="{{ onBackdropClick }}">
+      <div class="dialog" onClick="{{ stopClick }}" style="font-family: inherit;">
+
+        <sc-if value="{{ isDestModal }}" hint-placeholder-val="{{ false }}">
+          <div class="dialog-title">Куда скопировать сертификат</div>
+          <div class="dialog-body">{{ destCertOwner }}</div>
+          <div style="display: flex; flex-direction: column; gap: 2px;">
+            <sc-for list="{{ destView }}" as="d" hint-placeholder-count="4">
+              <div onClick="{{ d.onClick }}" style="display: flex; align-items: center; gap: 10px; padding: 9px 10px; border-radius: var(--radius-sm); cursor: pointer; background: {{ d.bg }}; color: {{ d.color }};">
+                <span style="width: 14px; height: 14px; border-radius: 50%; border: 1.5px solid var(--color-accent); flex: none; background: {{ d.dotBg }};"></span>
+                <div>
+                  <div style="font-size: 13.5px;">{{ d.label }}</div>
+                  <div style="font-size: 11px; opacity: .6;">{{ d.path }}</div>
+                </div>
+              </div>
+            </sc-for>
+          </div>
+          <sc-if value="{{ destCertLocked }}" hint-placeholder-val="{{ false }}">
+            <div onClick="{{ toggleFlagClear }}" style="display: flex; align-items: center; gap: 10px; padding: 10px 10px 2px; margin-top: 4px; border-top: 1px solid var(--color-divider); cursor: pointer;">
+              <span style="width: 16px; height: 16px; border-radius: 4px; border: 1.5px solid var(--color-accent); background: {{ flagCheckBg }}; display: flex; align-items: center; justify-content: center; flex: none;">
+                <sc-if value="{{ destFlagClear }}" hint-placeholder-val="{{ false }}">
+                  <svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="var(--color-bg)" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><path d="M5 12l5 5L19 7"></path></svg>
+                </sc-if>
+              </span>
+              <div style="font-size: 12.5px; color: var(--color-neutral-200);">Снять признак запрета на копирование закрытого ключа</div>
+            </div>
+          </sc-if>
+          <div class="dialog-actions"><span style="font-size: 11.5px; color: var(--color-neutral-500);">↑↓ выбор · Enter подтвердить · Esc отмена</span></div>
+        </sc-if>
+
+        <sc-if value="{{ isBlockedModal }}" hint-placeholder-val="{{ false }}">
+          <div class="dialog-title">Копирование невозможно</div>
+          <div class="dialog-body">{{ blockedMessage }}</div>
+          <div class="dialog-actions"><button class="btn btn-primary" onClick="{{ closeModal }}">OK (Enter/Esc)</button></div>
+        </sc-if>
+
+        <sc-if value="{{ isInfoModal }}" hint-placeholder-val="{{ false }}">
+          <div class="dialog-title">{{ infoTitle }}</div>
+          <div style="display: flex; flex-direction: column; gap: 6px; font-size: 13px;">
+            <sc-for list="{{ infoRows }}" as="r" hint-placeholder-count="4">
+              <div style="display: flex; justify-content: space-between; gap: 12px;"><span style="color: var(--color-neutral-500);">{{ r.k }}</span><span>{{ r.v }}</span></div>
+            </sc-for>
+          </div>
+          <div class="dialog-actions"><button class="btn btn-secondary" onClick="{{ closeModal }}">Закрыть (Esc)</button></div>
+        </sc-if>
+
+        <sc-if value="{{ isExitModal }}" hint-placeholder-val="{{ false }}">
+          <div class="dialog-title">Завершить сеанс?</div>
+          <div class="dialog-body">Приложение вернётся к списку токенов, журнал операций будет очищен.</div>
+          <div style="display: flex; flex-direction: column; gap: 2px;">
+            <sc-for list="{{ exitView }}" as="o" hint-placeholder-count="2">
+              <div onClick="{{ o.onClick }}" style="padding: 9px 10px; border-radius: var(--radius-sm); cursor: pointer; background: {{ o.bg }}; color: {{ o.color }}; font-size: 13.5px;">{{ o.label }}</div>
+            </sc-for>
+          </div>
+        </sc-if>
+
+      </div>
+    </div>
+  </sc-if>
+</div>
+
+</x-dc>
+<script type="text/x-dc" data-dc-script>
+class Component extends DCLogic {
+  tokens = [
+    { id: 't1', name: 'Rutoken ЭЦП 2.0', model: 'Rutoken ECP 2.0 flash', serial: '0A3F-77C1', reader: 'USB Reader 0', readOnly: false },
+    { id: 't2', name: 'JaCarta PKI', model: 'JaCarta PKI/ГОСТ', serial: '2F19-90BB', reader: 'USB Reader 1', readOnly: true },
+    { id: 't3', name: 'Rutoken Lite', model: 'Rutoken Lite 64K', serial: 'C701-4412', reader: 'USB Reader 2', readOnly: false },
+    { id: 't4', name: 'Аладдин eToken 5110', model: 'eToken 5110 72K', serial: '88E2-1050', reader: 'USB Reader 3', readOnly: false },
+  ];
+
+  certsByToken = {
+    t1: [
+      { id: 'c1', owner: 'Иванов Иван Иванович', issuer: 'ООО «УЦ Тензор»', validFrom: '12.03.2025', validTo: '12.03.2026', thumb: 'A1 3F 90 2C', exportable: true, alg: 'ГОСТ Р 34.10-2012 (256)' },
+      { id: 'c2', owner: 'ООО «Севертранс» (Петрова А.С.)', issuer: 'УЦ ФНС России', validFrom: '01.11.2024', validTo: '01.11.2025', thumb: '7C 21 DA 44', exportable: false, alg: 'ГОСТ Р 34.10-2012 (256)' },
+    ],
+    t2: [
+      { id: 'c3', owner: 'Сидоров Пётр Николаевич', issuer: 'УЦ Такском', validFrom: '20.06.2025', validTo: '20.06.2026', thumb: '0F 88 3B A2', exportable: true, alg: 'ГОСТ Р 34.10-2012 (256)' },
+    ],
+    t3: [
+      { id: 'c4', owner: 'Кузнецова Мария Дмитриевна', issuer: 'ООО «УЦ Тензор»', validFrom: '05.01.2026', validTo: '05.01.2027', thumb: '55 A0 12 FF', exportable: true, alg: 'ГОСТ Р 34.10-2012 (256)' },
+      { id: 'c5', owner: 'ИП Волков С.Г.', issuer: 'УЦ Калуга Астрал', validFrom: '14.09.2025', validTo: '14.09.2026', thumb: 'D3 40 9B 11', exportable: false, alg: 'ГОСТ Р 34.10-2012 (512)' },
+    ],
+    t4: [],
+  };
+
+  destinations = [
+    { id: 'd1', label: 'Диск D:\\', path: 'D:\\Сертификаты\\' },
+    { id: 'd2', label: 'Реестр Windows', path: 'HKCU\\...\\Certificates' },
+    { id: 'd3', label: 'Папка рядом с приложением', path: '.\\certs\\' },
+    { id: 'd4', label: 'Папка КриптоПро', path: '%ProgramData%\\Crypto Pro\\Store\\' },
+  ];
+
+  state = {
+    screen: 'tokens', modal: null,
+    tokenCursor: 0, certCursor: 0, selectedTokenIdx: null,
+    destCursor: 0, destFlagClear: false, exitCursor: 1,
+    infoTarget: null,
+    progressPct: 0,
+    lastResult: null,
+    log: [],
+  };
+
+  componentDidMount() {
+    this.onKeyDown = this.onKeyDown.bind(this);
+    window.addEventListener('keydown', this.onKeyDown);
+  }
+  componentWillUnmount() {
+    window.removeEventListener('keydown', this.onKeyDown);
+    if (this._timer) clearInterval(this._timer);
+  }
+
+  currentCerts() {
+    const t = this.tokens[this.state.selectedTokenIdx];
+    return t ? (this.certsByToken[t.id] || []) : [];
+  }
+
+  onKeyDown(e) {
+    const s = this.state;
+    if (s.modal) {
+      if (e.key === 'Escape') { e.preventDefault(); this.closeModal(); return; }
+      if (s.modal === 'dest') {
+        if (e.key === 'ArrowUp') { e.preventDefault(); this.setState(st => ({ destCursor: (st.destCursor + this.destinations.length - 1) % this.destinations.length })); }
+        else if (e.key === 'ArrowDown') { e.preventDefault(); this.setState(st => ({ destCursor: (st.destCursor + 1) % this.destinations.length })); }
+        else if (e.key === 'Enter') { e.preventDefault(); this.confirmDest(this.state.destCursor); }
+        else if (e.key === ' ') { e.preventDefault(); this.toggleFlagClear(); }
+      } else if (s.modal === 'exit') {
+        if (e.key === 'ArrowUp' || e.key === 'ArrowDown') { e.preventDefault(); this.setState(st => ({ exitCursor: st.exitCursor === 0 ? 1 : 0 })); }
+        else if (e.key === 'Enter') { e.preventDefault(); this.state.exitCursor === 0 ? this.confirmExit() : this.closeModal(); }
+      } else if (e.key === 'Enter') { e.preventDefault(); this.closeModal(); }
+      return;
+    }
+    if (e.key === 'F5') { e.preventDefault(); this.openCopyFlow(); return; }
+    if (e.key === 'F3') { e.preventDefault(); this.openInfo(); return; }
+    if (e.key === 'F10') { e.preventDefault(); this.openExit(); return; }
+    if (s.screen === 'tokens') {
+      if (e.key === 'ArrowUp') { e.preventDefault(); this.setState(st => ({ tokenCursor: (st.tokenCursor + this.tokens.length - 1) % this.tokens.length })); }
+      else if (e.key === 'ArrowDown') { e.preventDefault(); this.setState(st => ({ tokenCursor: (st.tokenCursor + 1) % this.tokens.length })); }
+      else if (e.key === 'Enter') { e.preventDefault(); this.enterToken(this.state.tokenCursor); }
+    } else if (s.screen === 'certs') {
+      const n = this.currentCerts().length;
+      if (e.key === 'ArrowUp' && n) { e.preventDefault(); this.setState(st => ({ certCursor: (st.certCursor + n - 1) % n })); }
+      else if (e.key === 'ArrowDown' && n) { e.preventDefault(); this.setState(st => ({ certCursor: (st.certCursor + 1) % n })); }
+      else if (e.key === 'Escape' || e.key === 'Backspace') { e.preventDefault(); this.goBack(); }
+    } else if (s.screen === 'result') {
+      if (e.key === 'Enter' || e.key === 'Escape') { e.preventDefault(); this.setState({ screen: 'certs' }); }
+    }
+  }
+
+  enterToken(i) { this.setState({ selectedTokenIdx: i, tokenCursor: i, screen: 'certs', certCursor: 0 }); }
+  goBack() {
+    if (this.state.screen === 'certs') this.setState({ screen: 'tokens' });
+    else if (this.state.screen === 'result') this.setState({ screen: 'certs' });
+  }
+
+  openCopyFlow() {
+    if (this.state.screen !== 'certs') return;
+    const certs = this.currentCerts();
+    if (!certs.length) return;
+    const tok = this.tokens[this.state.selectedTokenIdx];
+    if (tok.readOnly) { this.setState({ modal: 'blocked' }); return; }
+    this.setState({ modal: 'dest', destCursor: 0, destFlagClear: false });
+  }
+
+  toggleFlagClear() { this.setState(s => ({ destFlagClear: !s.destFlagClear })); }
+
+  confirmDest(destIdx) {
+    this.setState({ destCursor: destIdx });
+    const cert = this.currentCerts()[this.state.certCursor];
+    if (!cert.exportable) {
+      this.startProgress(this.state.destFlagClear ? { flagCleared: true } : { willFail: true });
+    } else this.startProgress({});
+  }
+
+  startProgress(opts) {
+    this.setState({ modal: null, screen: 'progress', progressPct: 0 });
+    let p = 0;
+    this._timer = setInterval(() => {
+      p += 8 + Math.random() * 10;
+      if (p >= 100) { p = 100; clearInterval(this._timer); this._timer = null; this.finishCopy(opts); }
+      this.setState({ progressPct: Math.min(100, Math.round(p)) });
+    }, 120);
+  }
+
+  finishCopy(opts) {
+    const cert = this.currentCerts()[this.state.certCursor];
+    const tok = this.tokens[this.state.selectedTokenIdx];
+    const dest = this.destinations[this.state.destCursor];
+    let status = 'ok', message = 'Сертификат и связанный закрытый ключ скопированы успешно.';
+    if (opts && opts.willFail) { status = 'error'; message = 'Экспорт закрытого ключа запрещён (CRYPT_E_NOT_EXPORTABLE). Копирование отменено.'; }
+    else if (opts && opts.flagCleared) { message = 'Признак запрета снят, сертификат и ключ скопированы успешно.'; }
+    const entry = { ts: new Date().toLocaleTimeString('ru-RU'), owner: cert.owner, tokenName: tok.name, dest: dest.label, status, message };
+    this.setState(s => ({ screen: 'result', lastResult: entry, log: [entry, ...s.log] }));
+  }
+
+  openInfo() {
+    const s = this.state;
+    if (s.screen === 'tokens') this.setState({ modal: 'info', infoTarget: { type: 'token', idx: s.tokenCursor } });
+    else if (s.screen === 'certs' && this.currentCerts().length) this.setState({ modal: 'info', infoTarget: { type: 'cert', idx: s.certCursor } });
+  }
+  openExit() { this.setState({ modal: 'exit', exitCursor: 1 }); }
+  confirmExit() { this.setState({ modal: null, screen: 'tokens', selectedTokenIdx: null, tokenCursor: 0, certCursor: 0, log: [] }); }
+  closeModal() { this.setState({ modal: null }); }
+
+  renderVals() {
+    const s = this.state;
+    const sel = (i, cur) => i === cur;
+    const rowColors = (isSel) => ({ bg: isSel ? 'var(--color-accent-700)' : 'transparent', color: isSel ? 'var(--color-accent-100)' : 'var(--color-text)' });
+
+    const tokensView = this.tokens.map((t, i) => {
+      const c = rowColors(sel(i, s.tokenCursor));
+      return { ...t, bg: c.bg, color: c.color, metaColor: 'color-mix(in srgb, ' + c.color + ' 65%, transparent)', certCount: (this.certsByToken[t.id] || []).length, onClick: () => this.enterToken(i) };
+    });
+
+    const tok = s.selectedTokenIdx !== null ? this.tokens[s.selectedTokenIdx] : null;
+    const rawCerts = this.currentCerts();
+    const certsView = rawCerts.map((c, i) => {
+      const cc = rowColors(sel(i, s.certCursor));
+      const locked = !c.exportable || (tok && tok.readOnly);
+      return {
+        ...c, bg: cc.bg, color: cc.color, metaColor: 'color-mix(in srgb, ' + cc.color + ' 65%, transparent)',
+        locked, notLocked: !locked,
+        lockLabel: tok && tok.readOnly ? 'устройство: только чтение' : 'ключ неэкспортируемый',
+        onClick: () => this.setState({ certCursor: i }),
+      };
+    });
+
+    const destView = this.destinations.map((d, i) => {
+      const isSel = sel(i, s.destCursor);
+      return { ...d, bg: isSel ? 'var(--color-accent-700)' : 'transparent', color: isSel ? 'var(--color-accent-100)' : 'var(--color-text)', dotBg: isSel ? 'var(--color-accent)' : 'transparent', onClick: () => { this.setState({ destCursor: i }); this.confirmDest(i); } };
+    });
+
+    const exitView = [
+      { label: 'Да, завершить сеанс', idx: 0 },
+      { label: 'Нет, остаться', idx: 1 },
+    ].map(o => {
+      const isSel = sel(o.idx, s.exitCursor);
+      return { ...o, bg: isSel ? 'var(--color-accent-700)' : 'transparent', color: isSel ? 'var(--color-accent-100)' : 'var(--color-text)', onClick: () => (o.idx === 0 ? this.confirmExit() : this.closeModal()) };
+    });
+
+    let infoTitle = '', infoRows = [];
+    if (s.infoTarget && s.infoTarget.type === 'token') {
+      const t = this.tokens[s.infoTarget.idx];
+      infoTitle = t.name;
+      infoRows = [
+        { k: 'Модель', v: t.model }, { k: 'Считыватель', v: t.reader }, { k: 'Серийный №', v: t.serial },
+        { k: 'Экспорт с устройства', v: t.readOnly ? 'запрещён' : 'разрешён' }, { k: 'Сертификатов', v: String((this.certsByToken[t.id] || []).length) },
+      ];
+    } else if (s.infoTarget && s.infoTarget.type === 'cert') {
+      const c = rawCerts[s.infoTarget.idx];
+      if (c) { infoTitle = c.owner; infoRows = [
+        { k: 'УЦ', v: c.issuer }, { k: 'Действителен с', v: c.validFrom }, { k: 'Действителен по', v: c.validTo },
+        { k: 'Отпечаток', v: c.thumb }, { k: 'Алгоритм', v: c.alg }, { k: 'Ключ экспортируемый', v: c.exportable ? 'да' : 'нет' },
+      ]; }
+    }
+
+    const logView = s.log.map(l => ({ ...l, statusLabel: l.status === 'ok' ? 'Успешно' : 'Ошибка', tagClass: l.status === 'ok' ? 'tag tag-accent' : 'tag tag-neutral' }));
+
+    const footerKeys = s.screen === 'tokens' ? [
+      { key: 'F3', label: 'Инфо', onClick: () => this.openInfo(), opacity: 1 },
+      { key: 'Enter', label: 'Открыть', onClick: () => this.enterToken(s.tokenCursor), opacity: 1 },
+      { key: 'F10', label: 'Выход', onClick: () => this.openExit(), opacity: 1 },
+    ] : s.screen === 'certs' ? [
+      { key: 'F3', label: 'Инфо', onClick: () => this.openInfo(), opacity: rawCerts.length ? 1 : 0.4 },
+      { key: 'F5', label: 'Копировать', onClick: () => this.openCopyFlow(), opacity: rawCerts.length ? 1 : 0.4 },
+      { key: 'Esc', label: 'Назад', onClick: () => this.goBack(), opacity: 1 },
+      { key: 'F10', label: 'Выход', onClick: () => this.openExit(), opacity: 1 },
+    ] : s.screen === 'result' ? [
+      { key: 'Enter', label: 'К сертификатам', onClick: () => this.setState({ screen: 'certs' }), opacity: 1 },
+      { key: 'F10', label: 'Выход', onClick: () => this.openExit(), opacity: 1 },
+    ] : [];
+
+    const breadcrumb = s.screen === 'tokens' ? 'Токены'
+      : s.screen === 'certs' ? 'Токены › ' + (tok ? tok.name : '')
+      : s.screen === 'progress' ? 'Токены › ' + (tok ? tok.name : '') + ' › Копирование'
+      : 'Токены › ' + (tok ? tok.name : '') + ' › Результат';
+
+    const destCert = rawCerts[s.certCursor];
+
+    return {
+      isTokensScreen: s.screen === 'tokens', isCertsScreen: s.screen === 'certs',
+      isProgressScreen: s.screen === 'progress', isResultScreen: s.screen === 'result',
+      hasCerts: rawCerts.length > 0, noCerts: rawCerts.length === 0,
+      tokensView, certsView, destView, exitView, logView,
+      tokensConnectedLabel: 'устройств подключено: ' + this.tokens.length,
+      breadcrumb,
+      progressOwner: destCert ? destCert.owner : '', progressDest: this.destinations[s.destCursor].label,
+      progressPct: s.progressPct, progressWidth: s.progressPct + '%',
+      lastOk: s.lastResult && s.lastResult.status === 'ok', lastErr: s.lastResult && s.lastResult.status === 'error',
+      lastMessage: s.lastResult ? s.lastResult.message : '', lastMeta: s.lastResult ? (s.lastResult.owner + ' · ' + s.lastResult.tokenName + ' · ' + s.lastResult.dest) : '',
+      footerKeys,
+      hasModal: !!s.modal, isDestModal: s.modal === 'dest', isBlockedModal: s.modal === 'blocked', isInfoModal: s.modal === 'info', isExitModal: s.modal === 'exit',
+      destCertOwner: destCert ? destCert.owner : '',
+      destCertLocked: !!(destCert && !destCert.exportable), destFlagClear: s.destFlagClear, flagCheckBg: s.destFlagClear ? 'var(--color-accent)' : 'transparent', toggleFlagClear: () => this.toggleFlagClear(),
+      blockedMessage: tok ? ('Токен «' + tok.name + '» не позволяет копировать сертификаты и ключи на внешние носители. Экспорт заблокирован на аппаратном уровне.') : '',
+      infoTitle, infoRows,
+      onBackdropClick: () => this.closeModal(), stopClick: (e) => e.stopPropagation(), closeModal: () => this.closeModal(),
+    };
+  }
+}
+
+</script>
+</body>
+</html>

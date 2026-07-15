@@ -36,5 +36,9 @@ Write-Host "Toolchain: $gpp"
 $make = Join-Path $bin "mingw32-make.exe"
 if (-not (Test-Path $make)) { $make = "mingw32-make" }
 
-& $make CXX="$gpp" @args
+# Тулчейн в PATH, чтобы windres (иконка) и прочие утилиты находились.
+$env:Path = "$bin;" + $env:Path
+$windres = Join-Path $bin "windres.exe"
+
+& $make CXX="$gpp" WINDRES="$windres" @args
 exit $LASTEXITCODE

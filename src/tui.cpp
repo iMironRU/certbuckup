@@ -164,6 +164,21 @@ std::wstring OwnerOf(const ContainerInfo& c) {
     return c.subjectCN;
 }
 
+// Название юрлица (или ИП) - организация из сертификата. Для парка КЭП это
+// главная идентичность, а не физлицо-держатель.
+std::wstring OrgName(const ContainerInfo& c) {
+    if (!c.subjectO.empty()) return c.subjectO;
+    if (!c.subjectCN.empty()) return c.subjectCN;
+    return OwnerOf(c);
+}
+
+// ИНН юрлица (даже для ИП), с откатом на физлицо, если юрлица нет.
+std::wstring LegalInn(const ContainerInfo& c) {
+    if (!c.innLe.empty()) return c.innLe;
+    if (!c.inn.empty()) return c.inn;
+    return L"—";
+}
+
 // --- Состояние --------------------------------------------------------------
 enum class Screen { Tokens, Certs };
 enum class Modal { None, Dest, Blocked, Info, Exit, Result, Overwrite };
@@ -175,7 +190,7 @@ struct DestOpt {
 };
 
 struct LogRow {
-    std::wstring ts, token, owner, dest, status;
+    std::wstring ts, org, inn, dest, status;
     bool ok;
 };
 
@@ -259,18 +274,13 @@ void RenderCerts(Canvas& cv, const State& s) {
                          c.medium == KeyMedium::DiskFile);
         cv.Fill(2, y, W - 4, 2, a);
         std::wstring icon = copyable ? L"▤ " : L"⚿ ";
-        cv.Text(4, y, icon + OwnerOf(c), sel ? A_SEL : A_ACC, W - 30);
-        // ИНН первым: владелец у контейнеров одной организации совпадает,
-        // различает их именно ИНН (ТЗ 2.1). Берём ИНН юрлица - он меняется
-        // между организациями; ИНН физлица у одного человека одинаков и не
-        // помогает. Для КЭП без юрлица - физлица.
-        std::wstring inn = !c.innLe.empty() ? c.innLe
-                           : !c.inn.empty() ? c.inn
-                                            : L"—";
-        std::wstring meta = L"ИНН " + inn + L" · до " + FormatDate(c.notAfter) +
-                            L" · " + (c.thumbprint.size() >= 8
-                                          ? c.thumbprint.substr(0, 8)
-                                          : c.thumbprint);
+        // Главная строка - юрлицо (или ИП); физлицо-держатель в информации F3.
+        cv.Text(4, y, icon + OrgName(c), sel ? A_SEL : A_ACC, W - 30);
+        // ИНН юрлица первым: организации различаются именно им (ТЗ 2.1).
+        std::wstring meta = L"ИНН " + LegalInn(c) + L" · до " +
+                            FormatDate(c.notAfter) + L" · " +
+                            (c.thumbprint.size() >= 8 ? c.thumbprint.substr(0, 8)
+                                                      : c.thumbprint);
         cv.Text(4, y + 1, L"  " + meta, sel ? A_SEL : A_DIM, W - 30);
         std::wstring tag;
         if (c.medium == KeyMedium::HardWare) tag = L" устройство: только чтение ";
@@ -297,7 +307,8 @@ void RenderDest(Canvas& cv, const State& s) {
     int w = W - 8 > 96 ? 96 : W - 8;
     int h = 20, x = (W - w) / 2, y = (H - h) / 2;
     DrawDialog(cv, x, y, w, h, L"Куда скопировать контейнер");
-    cv.Text(x + 3, y + 2, OwnerOf(c), A_SURFACC, w - 6);
+    cv.Text(x + 3, y + 2, OrgName(c) + L"  ·  ИНН " + LegalInn(c), A_SURFACC,
+            w - 6);
 
     int ry = y + 4;
     for (int i = 0; i < static_cast<int>(s.dests.size()); ++i) {
@@ -359,9 +370,10 @@ void RenderInfo(Canvas& cv, const State& s) {
     } else {
         const ContainerInfo& c =
             s.items[s.toks[s.selTok].certIdx[s.certCursor]];
-        title = OwnerOf(c);
-        rows = {{L"Организация", c.subjectO},
-                {L"ИНН", c.Inn()},
+        title = OrgName(c);
+        rows = {{L"ИНН юрлица", c.innLe.empty() ? L"—" : c.innLe},
+                {L"Держатель (ФИО)", OwnerOf(c)},
+                {L"ИНН физлица", c.inn.empty() ? L"—" : c.inn},
                 {L"СНИЛС", c.snils},
                 {L"Действует с", FormatDate(c.notBefore)},
                 {L"Действует по", FormatDate(c.notAfter)},
@@ -383,20 +395,40 @@ void RenderInfo(Canvas& cv, const State& s) {
 void RenderResult(Canvas& cv, const State& s) {
     cv.Clear(A_BG);
     DrawWindow(cv, L"Результат операции", L"");
-    std::wstring mark = s.resultKind == 0 ? L"✓ " : s.resultKind == 1 ? L"• " : L"✗ ";
-    cv.Fill(2, 2, W - 4, 2, Attr(C_TEXT, C_NEUTRAL));
-    cv.Text(4, 2, mark + s.resultMsg, s.resultKind == 0 ? A_ACC : A_DIM, W - 8);
 
-    cv.Text(4, 5, L"Журнал операций за сеанс:", A_DIM);
-    cv.Text(4, 6, Pad(L"Время", 10) + Pad(L"Токен", 20) + Pad(L"Владелец", 30) +
-                      Pad(L"Статус", 12), A_DIM);
-    int y = 7;
+    // Статус-плашка: рамка на поверхности, крупная иконка + сообщение.
+    int tileW = W - 6;
+    cv.Fill(3, 2, tileW, 3, A_SURF);
+    WORD markAttr = s.resultKind == 0 ? A_SURFACC : A_SURFDIM;
+    std::wstring mark = s.resultKind == 0   ? L"[ OK ]"
+                        : s.resultKind == 1 ? L"[ • ]"
+                                            : L"[ !! ]";
+    cv.Text(5, 3, mark, markAttr);
+    cv.Text(14, 3, s.resultMsg, A_SURF, tileW - 14);
+
+    // Таблица журнала за сеанс.
+    const int cT = 4, cOrg = 16, cInn = 42, cDest = 60;
+    int hy = 7;
+    cv.Text(cT, hy, L"Журнал операций за сеанс", A_ACC);
+    hy += 1;
+    cv.Text(cT, hy, L"Время", A_DIM);
+    cv.Text(cOrg, hy, L"Организация", A_DIM);
+    cv.Text(cInn, hy, L"ИНН", A_DIM);
+    cv.Text(cDest, hy, L"Назначение", A_DIM);
+    cv.Text(cDest + 24, hy, L"Статус", A_DIM);
+    hy += 1;
+    cv.Text(cT, hy, std::wstring(W - 8, L'─'), A_DIM);
+    hy += 1;
+
+    int y = hy;
     for (int i = static_cast<int>(s.log.size()) - 1; i >= 0 && y < H - 3; --i) {
         const LogRow& r = s.log[i];
-        cv.Text(4, y,
-                Pad(r.ts, 10) + Pad(r.token, 20) + Pad(r.owner, 30) +
-                    Pad(r.status, 12),
-                r.ok ? A_BG : A_DIM);
+        WORD a = r.ok ? A_BG : A_DIM;
+        cv.Text(cT, y, r.ts, a);
+        cv.Text(cOrg, y, r.org, a, cInn - cOrg - 1);
+        cv.Text(cInn, y, r.inn, a, cDest - cInn - 1);
+        cv.Text(cDest, y, r.dest, a, 22);
+        cv.Text(cDest + 24, y, r.status, r.ok ? A_ACC : A_DIM);
         y += 1;
     }
     DrawFooter(cv, L"Enter / Esc — к списку сертификатов   F10 выход");
@@ -628,8 +660,8 @@ void DoCopy(State& s, bool overwrite) {
 
     LogRow row;
     row.ts = NowHHMM();
-    row.token = t.title;
-    row.owner = OwnerOf(c);
+    row.org = OrgName(c);
+    row.inn = LegalInn(c);
     row.dest = d.label;
 
     if (!d.implemented) {
@@ -640,7 +672,7 @@ void DoCopy(State& s, bool overwrite) {
     } else {
         BackupResult br = BackupToFolder(c, d.path, overwrite);
         s.resultKind = br.ok ? 0 : br.skipped ? 1 : 2;
-        s.resultMsg = br.message;
+        s.resultMsg = OrgName(c) + L" · ИНН " + LegalInn(c) + L"  —  " + br.message;
         row.ok = br.ok;
         row.status = br.ok ? L"Успешно" : br.skipped ? L"Пропущено" : L"Ошибка";
         if (br.ok && s.flagClear)

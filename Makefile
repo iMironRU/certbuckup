@@ -34,12 +34,23 @@ TARGET   := $(BUILDDIR)/cert-migrator.exe
 SRCS := $(wildcard $(SRCDIR)/*.cpp)
 OBJS := $(patsubst $(SRCDIR)/%.cpp,$(BUILDDIR)/%.o,$(SRCS))
 
+# Иконка exe: собираем ресурс только если файл иконки существует, иначе
+# сборка идёт без иконки и не ломается.
+WINDRES ?= $(dir $(CXX))windres
+ICO := $(wildcard assets/app.ico)
+ifneq ($(ICO),)
+  RES := $(BUILDDIR)/app.res.o
+endif
+
 .PHONY: all clean check
 
 all: $(TARGET)
 
-$(TARGET): $(OBJS)
-	$(CXX) $(LDFLAGS) -o $@ $^ $(LDLIBS)
+$(TARGET): $(OBJS) $(RES)
+	$(CXX) $(LDFLAGS) -o $@ $(OBJS) $(RES) $(LDLIBS)
+
+$(BUILDDIR)/app.res.o: $(SRCDIR)/app.rc $(ICO) | $(BUILDDIR)
+	$(WINDRES) --include-dir . $< -O coff -o $@
 
 $(BUILDDIR)/%.o: $(SRCDIR)/%.cpp | $(BUILDDIR)
 	$(CXX) $(CXXFLAGS) -c -o $@ $<

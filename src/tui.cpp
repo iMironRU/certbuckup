@@ -183,7 +183,7 @@ std::wstring LegalInn(const ContainerInfo& c) {
 enum class Screen { Tokens, Certs };
 enum class Modal { None, Dest, Blocked, Info, Exit, Result, Overwrite };
 
-enum DestKind { DEST_FOLDER, DEST_REGISTRY, DEST_TODO };
+enum DestKind { DEST_FOLDER, DEST_REGISTRY, DEST_CPSTORE, DEST_TODO };
 struct DestOpt {
     std::wstring label;
     std::wstring path;      // куда (для папок)
@@ -217,7 +217,7 @@ struct State {
         {L"Диск D:\\", L"D:\\Сертификаты", DEST_FOLDER},
         {L"Реестр Windows", L"", DEST_REGISTRY},
         {L"Папка рядом с приложением", DefaultBackupDir(), DEST_FOLDER},
-        {L"Папка КриптоПро", L"", DEST_TODO},
+        {L"Папка КриптоПро", CryptoProStoreDir(), DEST_CPSTORE},
     };
 };
 
@@ -322,10 +322,11 @@ void RenderDest(Canvas& cv, const State& s) {
         std::wstring line = radio + d.label;
         if (d.kind == DEST_TODO) line += L"  (в разработке)";
         cv.Text(x + 4, ry, line, sel ? A_SURFACC : A_SURF, w - 8);
-        std::wstring path = d.kind == DEST_FOLDER ? d.path
-                            : d.kind == DEST_REGISTRY
-                                ? L"HKLM\\...\\Crypto Pro\\...\\Keys (нужен админ)"
-                                : L"—";
+        std::wstring path =
+            d.kind == DEST_FOLDER || d.kind == DEST_CPSTORE ? d.path
+            : d.kind == DEST_REGISTRY
+                ? L"HKLM\\...\\Crypto Pro\\...\\Keys (нужен админ)"
+                : L"—";
         cv.Text(x + 8, ry + 1, path, sel ? A_SURF : A_SURFDIM, w - 12);
         ry += 2;
     }
@@ -680,9 +681,10 @@ void DoCopy(State& s, bool overwrite) {
     } else {
         // Снятие флага - только если чекбокс доступен (CSP 4.x) и отмечен.
         bool clr = s.flagClear && s.cspMajor > 0 && s.cspMajor <= 4;
-        BackupResult br = d.kind == DEST_REGISTRY
-                              ? BackupToRegistry(c, overwrite, clr)
-                              : BackupToFolder(c, d.path, overwrite, clr);
+        BackupResult br =
+            d.kind == DEST_REGISTRY  ? BackupToRegistry(c, overwrite, clr)
+            : d.kind == DEST_CPSTORE ? BackupToCryptoProStore(c, overwrite, clr)
+                                     : BackupToFolder(c, d.path, overwrite, clr);
         s.resultKind = br.ok ? 0 : br.skipped ? 1 : 2;
         s.resultMsg = OrgName(c) + L" · ИНН " + LegalInn(c) + L"  —  " + br.message;
         row.ok = br.ok;
@@ -704,6 +706,8 @@ void RequestCopy(State& s) {
                  INVALID_FILE_ATTRIBUTES;
     else if (d.kind == DEST_REGISTRY)
         exists = RegistryContainerExists(c);
+    else if (d.kind == DEST_CPSTORE)
+        exists = CryptoProStoreExists(c);
     if (exists) {
         s.overwriteCursor = 1;  // по умолчанию - отмена (безопаснее)
         s.modal = Modal::Overwrite;

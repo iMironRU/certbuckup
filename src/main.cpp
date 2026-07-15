@@ -124,6 +124,7 @@ int main(int argc, char** argv) {
     bool envOnly = false;
     bool textList = false;           // --list: текстовый вывод вместо TUI
     bool backupToReg = false;        // --backup-reg: копия в реестр
+    bool backupToCp = false;         // --backup-cp: копия в папку КриптоПро
     int backupIndex = 0;             // 1-based номер строки для --backup
     std::wstring targetBase;         // --to; по умолчанию папка cert рядом с exe
     for (int i = 1; i < argc; ++i) {
@@ -150,6 +151,10 @@ int main(int argc, char** argv) {
         if (a == "--backup-reg" && i + 1 < argc) {
             backupIndex = atoi(argv[++i]);
             backupToReg = true;
+        }
+        if (a == "--backup-cp" && i + 1 < argc) {
+            backupIndex = atoi(argv[++i]);
+            backupToCp = true;
         }
         if (a == "--to" && i + 1 < argc) {
             std::string t = argv[++i];
@@ -214,8 +219,10 @@ int main(int argc, char** argv) {
                 c.subjectCN + L" (" + c.Inn() + L"), до " +
                 certmig::FormatDate(c.notAfter));
         OutLine();
-        if (backupToReg) {
-            certmig::BackupResult r = certmig::BackupToRegistry(c);
+        if (backupToReg || backupToCp) {
+            certmig::BackupResult r = backupToReg
+                                          ? certmig::BackupToRegistry(c)
+                                          : certmig::BackupToCryptoProStore(c);
             OutLine(r.message);
             OutLine(L"Журнал: " + certmig::JournalPath());
             return r.ok ? 0 : 3;

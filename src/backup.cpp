@@ -346,4 +346,82 @@ bool RegistryContainerExists(const ContainerInfo& c) {
     return false;
 }
 
+std::wstring CryptoProStoreDir() {
+    wchar_t buf[MAX_PATH];
+    DWORD n = GetEnvironmentVariableW(L"LOCALAPPDATA", buf, MAX_PATH);
+    std::wstring base = (n > 0 && n < MAX_PATH) ? std::wstring(buf, n) : L"";
+    return base + L"\\Crypto Pro";
+}
+
+// Имя папки дискового контейнера: <8.3>.000 - формат HDIMAGE КриптоПро.
+static std::wstring CpContainerDir(const ContainerInfo& c) {
+    return CryptoProStoreDir() + L"\\" + Name83(c) + L".000";
+}
+
+bool CryptoProStoreExists(const ContainerInfo& c) {
+    return GetFileAttributesW(CpContainerDir(c).c_str()) !=
+           INVALID_FILE_ATTRIBUTES;
+}
+
+BackupResult BackupToCryptoProStore(const ContainerInfo& c, bool overwrite,
+                                    bool clearExportFlag) {
+    BackupResult r;
+    std::wstring subj = c.subjectCN + L" / " + c.Inn();
+
+    if (c.medium == KeyMedium::HardWare) {
+        r.message = L"Контейнер аппаратный — копировать нечего.";
+        return r;
+    }
+    if (c.medium != KeyMedium::FileToken || c.folderId < 0) {
+        r.message = L"В папку КриптоПро копируется только файловый контейнер "
+                    L"с токена.";
+        return r;
+    }
+
+    r.reader = FindReaderForFolder(c.folderId);
+    if (r.reader.empty()) {
+        r.message = L"Не найден токен с контейнером — переподключите носитель.";
+        return r;
+    }
+    std::wstring err;
+    if (!ReadContainer(r.reader, c.folderId, &r.files, &err)) {
+        r.message = L"Ошибка чтения контейнера: " + err;
+        return r;
+    }
+
+    r.name83 = Name83(c);
+    r.dest = CpContainerDir(c);
+
+    if (GetFileAttributesW(r.dest.c_str()) != INVALID_FILE_ATTRIBUTES) {
+        if (!overwrite) {
+            r.skipped = true;
+            r.message = L"Контейнер уже в папке КриптоПро: " + r.name83;
+            JournalOp(L"backup-cp", subj, c.thumbprint, r.reader, r.dest,
+                      L"пропуск: уже существует");
+            return r;
+        }
+        RemoveDirRecursive(r.dest);
+    }
+    if (!EnsureDir(CryptoProStoreDir()) || !EnsureDir(r.dest)) {
+        r.message = L"Не удалось создать папку: " + r.dest;
+        return r;
+    }
+
+    if (clearExportFlag) ClearExportFlagInFiles(&r.files);
+
+    for (const ContainerFile& f : r.files) {
+        if (!WriteBytes(r.dest + L"\\" + f.name, f.data)) {
+            r.message = L"Не удалось записать файл: " + f.name;
+            JournalOp(L"backup-cp", subj, c.thumbprint, r.reader, r.dest,
+                      L"ошибка записи: " + f.name);
+            return r;
+        }
+    }
+
+    JournalOp(L"backup-cp", subj, c.thumbprint, r.reader, r.dest, L"OK");
+    r.ok = true;
+    r.message = L"Скопировано в папку КриптоПро: " + r.name83;
+    return r;
+}
+
 }  // namespace certmig

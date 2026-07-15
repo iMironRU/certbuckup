@@ -47,6 +47,15 @@ BackupResult BackupToRegistry(const ContainerInfo& c, bool overwrite = false,
 // Есть ли уже такой контейнер в реестре (для предупреждения о перезаписи).
 bool RegistryContainerExists(const ContainerInfo& c);
 
+// Копирует контейнер в хранилище КриптоПро на диске (HDIMAGE):
+// %LOCALAPPDATA%\Crypto Pro\<8.3-имя>.000 с 6 файлами. Per-user, без админа.
+// CryptoPro читает такой контейнер как локальный дисковый.
+BackupResult BackupToCryptoProStore(const ContainerInfo& c,
+                                    bool overwrite = false,
+                                    bool clearExportFlag = false);
+std::wstring CryptoProStoreDir();          // %LOCALAPPDATA%\Crypto Pro
+bool CryptoProStoreExists(const ContainerInfo& c);
+
 // Путь к папке cert рядом с exe - цель по умолчанию.
 std::wstring DefaultBackupDir();
 

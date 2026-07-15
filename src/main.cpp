@@ -9,117 +9,14 @@
 #include <string>
 #include <vector>
 
+#include "backup.h"
 #include "capabilities.h"
 #include "journal.h"
 #include "resolver.h"
 #include "rutoken.h"
+#include "tui.h"
 
 namespace {
-
-std::wstring ExeDir() {
-    wchar_t buf[MAX_PATH];
-    DWORD n = GetModuleFileNameW(nullptr, buf, MAX_PATH);
-    std::wstring path(buf, n);
-    size_t slash = path.find_last_of(L"\\/");
-    return (slash == std::wstring::npos) ? L"." : path.substr(0, slash);
-}
-
-// ИНН для имени папки: юрлица, иначе физлица (для КЭП без юрлица).
-std::wstring FolderInn(const certmig::ContainerInfo& c) {
-    if (!c.innLe.empty()) return c.innLe;
-    if (!c.inn.empty()) return c.inn;
-    return L"noinn";
-}
-
-// ММГГ по дате окончания сертификата: месяц и две цифры года.
-std::wstring MMYY(const FILETIME& ft) {
-    FILETIME local;
-    SYSTEMTIME st;
-    if (!FileTimeToLocalFileTime(&ft, &local) ||
-        !FileTimeToSystemTime(&local, &st))
-        return L"0000";
-    wchar_t buf[8];
-    swprintf(buf, 8, L"%02u%02u", st.wMonth, st.wYear % 100);
-    return buf;
-}
-
-bool EnsureDir(const std::wstring& path) {
-    if (CreateDirectoryW(path.c_str(), nullptr)) return true;
-    return GetLastError() == ERROR_ALREADY_EXISTS;
-}
-
-bool WriteBytes(const std::wstring& path, const std::vector<BYTE>& data) {
-    HANDLE h = CreateFileW(path.c_str(), GENERIC_WRITE, 0, nullptr,
-                           CREATE_NEW, FILE_ATTRIBUTE_NORMAL, nullptr);
-    if (h == INVALID_HANDLE_VALUE) return false;
-    DWORD written = 0;
-    bool ok = WriteFile(h, data.data(), static_cast<DWORD>(data.size()),
-                        &written, nullptr) &&
-              written == data.size();
-    CloseHandle(h);
-    return ok;
-}
-
-// 8.3-совместимое имя контейнера для CryptoPro: первые 8 hex от thumbprint.
-// FAT12-профиль флоппи-контейнера ограничивает имя папки восемью символами,
-// поэтому ИНН (10-12 цифр) как имя контейнера не годится - только как обёртка.
-std::wstring Name83(const certmig::ContainerInfo& c) {
-    if (c.thumbprint.size() >= 8) return c.thumbprint.substr(0, 8);
-    if (c.folderId >= 0) {
-        wchar_t buf[12];
-        swprintf(buf, 12, L"%08X", c.folderId);
-        return buf;
-    }
-    return L"CONT0001";
-}
-
-// Дописывает строку в index.csv рядом с целью: карта 8.3-папки на
-// человекочитаемые поля. Разделитель ';' - дружелюбно к Excel-RU.
-void AppendIndex(const std::wstring& targetBase,
-                 const certmig::ContainerInfo& c, const std::wstring& human,
-                 const std::wstring& name83) {
-    std::wstring path = targetBase + L"\\index.csv";
-    bool isNew = GetFileAttributesW(path.c_str()) == INVALID_FILE_ATTRIBUTES;
-
-    std::wstring fio = c.surname.empty() && c.given.empty()
-                           ? c.subjectCN
-                           : c.surname + L" " + c.given;
-    std::wstring row;
-    if (isNew)
-        row += L"ИНН;Владелец;Действует до;Thumbprint;Папка;Контейнер\r\n";
-    row += c.Inn() + L";" + fio + L";" + certmig::FormatDate(c.notAfter) + L";" +
-           c.thumbprint + L";" + human + L";" + name83 + L"\r\n";
-
-    HANDLE h = CreateFileW(path.c_str(), FILE_APPEND_DATA, FILE_SHARE_READ,
-                           nullptr, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
-    if (h == INVALID_HANDLE_VALUE) return;
-    int need = WideCharToMultiByte(CP_UTF8, 0, row.c_str(), -1, nullptr, 0,
-                                   nullptr, nullptr);
-    std::string utf8(need > 0 ? need - 1 : 0, '\0');
-    if (need > 0)
-        WideCharToMultiByte(CP_UTF8, 0, row.c_str(), -1, &utf8[0], need, nullptr,
-                            nullptr);
-    // UTF-8 BOM в начало нового файла, чтобы Excel не ломал кириллицу.
-    DWORD w = 0;
-    SetFilePointer(h, 0, nullptr, FILE_END);
-    if (isNew) {
-        const unsigned char bom[3] = {0xEF, 0xBB, 0xBF};
-        WriteFile(h, bom, 3, &w, nullptr);
-    }
-    WriteFile(h, utf8.data(), static_cast<DWORD>(utf8.size()), &w, nullptr);
-    CloseHandle(h);
-}
-
-// Находит ридер rtComLite, на котором лежит папка folderId. Имя ридера
-// rtComLite (Aktiv Rutoken lite 0) не совпадает с коротким id из FQCN,
-// поэтому ищем по факту наличия папки-контейнера.
-std::wstring FindReaderForFolder(int folderId) {
-    for (const std::wstring& r : certmig::EnumReaders()) {
-        certmig::TokenScan s = certmig::ScanToken(r);
-        if (s.ok && s.containerFolders.count(folderId)) return r;
-    }
-    return L"";
-}
 
 // Вывод в UTF-8: иначе кириллица превращается в мусор и при печати в консоль,
 // и при перенаправлении в файл.
@@ -193,84 +90,17 @@ void PrintEnvironment(const certmig::Environment& env) {
     }
 }
 
-// Резервное копирование одного контейнера в папку targetBase\ИНН.ММГГ
-// (ТЗ 2.2). Читает шесть файлов с токена через rtComLite, пишет их. На токене
-// ничего не меняется. Пишет запись в журнал (ТЗ 6). Возвращает код возврата.
+// Обёртка над модулем backup для консольного режима --backup.
 int BackupContainer(const certmig::ContainerInfo& c,
                     const std::wstring& targetBase) {
-    std::wstring subj = c.subjectCN + L" / " + c.Inn();
-
-    if (c.medium == certmig::KeyMedium::HardWare) {
-        OutLine(L"Контейнер аппаратный (ключ в чипе) — копировать нечего.");
-        certmig::JournalOp(L"backup", subj, c.thumbprint, c.name, targetBase,
-                           L"отказ: аппаратный ключ");
-        return 3;
-    }
-    if (c.medium != certmig::KeyMedium::FileToken || c.folderId < 0) {
-        OutLine(L"Этот бэкенд копирует только файловые контейнеры с токена.");
-        OutLine(L"Для реестра используйте keycopy (пока не реализован).");
-        return 3;
-    }
-
-    std::wstring reader = FindReaderForFolder(c.folderId);
-    if (reader.empty()) {
-        OutLine(L"Не найден токен с контейнером — переподключите носитель.");
-        certmig::JournalOp(L"backup", subj, c.thumbprint, c.name, targetBase,
-                           L"ошибка: токен не найден");
-        return 4;
-    }
-
-    std::vector<certmig::ContainerFile> files;
-    std::wstring err;
-    if (!certmig::ReadContainer(reader, c.folderId, &files, &err)) {
-        OutLine(L"Ошибка чтения контейнера: " + err);
-        certmig::JournalOp(L"backup", subj, c.thumbprint, reader, targetBase,
-                           L"ошибка чтения: " + err);
-        return 4;
-    }
-
-    // Структура: <цель>\<ИНН.ММГГ>\<8.3>\*.key
-    //   обёртка ИНН.ММГГ - человекочитаемая (архив),
-    //   8.3 - валидное имя контейнера для CryptoPro (FAT12-профиль).
-    std::wstring human = FolderInn(c) + L"." + MMYY(c.notAfter);
-    std::wstring name83 = Name83(c);
-    std::wstring wrapper = targetBase + L"\\" + human;
-    std::wstring dest = wrapper + L"\\" + name83;
-
-    if (!EnsureDir(targetBase) || !EnsureDir(wrapper)) {
-        OutLine(L"Не удалось создать папку: " + wrapper);
-        return 5;
-    }
-    if (GetFileAttributesW(dest.c_str()) != INVALID_FILE_ATTRIBUTES) {
-        OutLine(L"Контейнер уже сохранён: " + dest);
-        OutLine(L"Удалите папку или выберите другую цель — перезаписывать не буду.");
-        certmig::JournalOp(L"backup", subj, c.thumbprint, reader, dest,
-                           L"отказ: папка существует");
-        return 5;
-    }
-    if (!EnsureDir(dest)) {
-        OutLine(L"Не удалось создать папку контейнера: " + dest);
-        return 5;
-    }
-
-    for (const certmig::ContainerFile& f : files) {
-        if (!WriteBytes(dest + L"\\" + f.name, f.data)) {
-            OutLine(L"Не удалось записать файл: " + f.name);
-            certmig::JournalOp(L"backup", subj, c.thumbprint, reader, dest,
-                               L"ошибка записи: " + f.name);
-            return 5;
-        }
-    }
-
-    AppendIndex(targetBase, c, human, name83);
-
-    OutLine(L"Скопировано в: " + dest);
-    OutLine(L"  (контейнер CryptoPro: " + name83 + L", 8.3-совместимо)");
-    for (const certmig::ContainerFile& f : files)
+    certmig::BackupResult r = certmig::BackupToFolder(c, targetBase);
+    OutLine(r.message);
+    if (!r.ok) return 3;
+    OutLine(L"  (контейнер CryptoPro: " + r.name83 + L", 8.3-совместимо)");
+    for (const certmig::ContainerFile& f : r.files)
         OutLine(L"    " + f.name + L"  (" + std::to_wstring(f.data.size()) +
                 L" байт)");
     OutLine(L"Индекс: " + targetBase + L"\\index.csv");
-    certmig::JournalOp(L"backup", subj, c.thumbprint, reader, dest, L"OK");
     OutLine(L"Журнал: " + certmig::JournalPath());
     return 0;
 }
@@ -308,6 +138,8 @@ int main(int argc, char** argv) {
         }
         if (a == "-v" || a == "--verbose") verbose = true;
         if (a == "--env") envOnly = true;
+        if (a == "--tui") return certmig::RunTui();
+        if (a == "--tui-dump") return certmig::RunTuiDump();
         if (a == "--backup" && i + 1 < argc) backupIndex = atoi(argv[++i]);
         if (a == "--to" && i + 1 < argc) {
             std::string t = argv[++i];
@@ -363,7 +195,7 @@ int main(int argc, char** argv) {
                     L" (всего " + std::to_wstring(items.size()) + L").");
             return 2;
         }
-        if (targetBase.empty()) targetBase = ExeDir() + L"\\cert";
+        if (targetBase.empty()) targetBase = certmig::DefaultBackupDir();
         const certmig::ContainerInfo& c = items[backupIndex - 1];
         OutLine(L"Копирование №" + std::to_wstring(backupIndex) + L": " +
                 c.subjectCN + L" (" + c.Inn() + L"), до " +

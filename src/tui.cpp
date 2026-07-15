@@ -44,7 +44,9 @@ const WORD A_SURFDIM = Attr(C_DIM, C_SURFACE);
 const WORD A_SURFACC = Attr(C_ACCENTHI, C_SURFACE);
 const WORD A_TAG = Attr(C_BG, C_ACCENT);
 
-const int W = 104, H = 32;
+// Размер холста. Не константы: подстраиваются под фактическое окно консоли
+// в Console::Init. По умолчанию - на случай дампа без консоли.
+int W = 104, H = 32;
 
 // --- Холст ------------------------------------------------------------------
 struct Canvas {
@@ -401,7 +403,15 @@ struct Console {
         GetConsoleMode(in, &savedInMode);
         GetConsoleCursorInfo(out, &savedCursor);
 
-        // Палитра Nocturne.
+        // Подстраиваемся под фактическое окно, а не навязываем свой размер.
+        // Так работает и в классическом conhost, и в Windows Terminal, где
+        // приложение окно не ресайзит.
+        int cols = savedInfo.srWindow.Right - savedInfo.srWindow.Left + 1;
+        int rows = savedInfo.srWindow.Bottom - savedInfo.srWindow.Top + 1;
+        W = cols < 40 ? 40 : (cols > 200 ? 200 : cols);
+        H = rows < 12 ? 12 : (rows > 60 ? 60 : rows);
+
+        // Палитра Nocturne + буфер под размер окна (без прокрутки).
         CONSOLE_SCREEN_BUFFER_INFOEX info = savedInfo;
         info.ColorTable[C_BG] = Rgb(0x16, 0x18, 0x26);
         info.ColorTable[C_SURFACE] = Rgb(0x23, 0x25, 0x32);
@@ -412,18 +422,13 @@ struct Console {
         info.ColorTable[C_TEXT] = Rgb(0xe9, 0xe9, 0xed);
         info.ColorTable[C_WHITE] = Rgb(0xff, 0xff, 0xff);
         info.wAttributes = A_BG;
-        // Буфер под размер холста.
-        info.dwSize.X = W;
-        info.dwSize.Y = H;
+        info.dwSize.X = static_cast<SHORT>(W);
+        info.dwSize.Y = static_cast<SHORT>(H);
         info.srWindow.Left = 0;
         info.srWindow.Top = 0;
-        info.srWindow.Right = W;      // +1: обход бага усечения окна
-        info.srWindow.Bottom = H;
+        info.srWindow.Right = static_cast<SHORT>(W - 1);
+        info.srWindow.Bottom = static_cast<SHORT>(H - 1);
         SetConsoleScreenBufferInfoEx(out, &info);
-
-        SMALL_RECT win = {0, 0, static_cast<SHORT>(W - 1),
-                          static_cast<SHORT>(H - 1)};
-        SetConsoleWindowInfo(out, TRUE, &win);
 
         CONSOLE_CURSOR_INFO cur = savedCursor;
         cur.bVisible = FALSE;
@@ -433,7 +438,7 @@ struct Console {
     }
 
     void Present(const Canvas& cv) {
-        COORD size = {W, H};
+        COORD size = {static_cast<SHORT>(W), static_cast<SHORT>(H)};
         COORD org = {0, 0};
         SMALL_RECT region = {0, 0, static_cast<SHORT>(W - 1),
                              static_cast<SHORT>(H - 1)};
@@ -489,19 +494,29 @@ void DoCopy(State& s) {
 }  // namespace
 
 int RunTui() {
-    State s;
-    s.items = EnumerateContainers();
-    s.toks = BuildTokens(s.items);
-    if (s.toks.empty()) {
-        // Нечего показывать - падать в TUI смысла нет.
-        return 0;
-    }
-
     Console con;
     con.Init();
     if (!con.ok) return 1;
 
     Canvas cv;
+
+    // Экран загрузки: инвентаризация сканирует токены через rtComLite и может
+    // занять несколько секунд. Показываем сообщение сразу, чтобы не выглядело
+    // зависшим.
+    cv.Clear(A_BG);
+    cv.Box(0, 0, W, H, A_BORDER);
+    cv.Text(W / 2 - 20, H / 2 - 1, L"Чтение контейнеров и опрос токенов…", A_ACC);
+    cv.Text(W / 2 - 20, H / 2 + 1, L"Это может занять несколько секунд.", A_DIM);
+    con.Present(cv);
+
+    State s;
+    s.items = EnumerateContainers();
+    s.toks = BuildTokens(s.items);
+    if (s.toks.empty()) {
+        con.Restore();
+        return 0;
+    }
+
     bool running = true;
     while (running) {
         Render(cv, s);

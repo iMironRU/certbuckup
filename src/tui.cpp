@@ -6,6 +6,7 @@
 #include <vector>
 
 #include "backup.h"
+#include "capabilities.h"
 #include "resolver.h"
 
 namespace certmig {
@@ -28,6 +29,24 @@ enum {
 COLORREF Rgb(int r, int g, int b) {
     return static_cast<COLORREF>((b << 16) | (g << 8) | r);
 }
+
+// Таблица палитры Nocturne по индексам. Для VT-режима (Windows Terminal
+// игнорирует палитру консоли, поэтому цвет задаём truecolor-escape'ами).
+COLORREF g_pal[16];
+void InitPalette() {
+    for (int i = 0; i < 16; ++i) g_pal[i] = Rgb(0x80, 0x80, 0x80);
+    g_pal[C_BG] = Rgb(0x16, 0x18, 0x26);
+    g_pal[C_SURFACE] = Rgb(0x23, 0x25, 0x32);
+    g_pal[C_NEUTRAL] = Rgb(0x29, 0x2b, 0x31);
+    g_pal[C_ACCENT] = Rgb(0x91, 0x84, 0xd9);
+    g_pal[C_DIM] = Rgb(0x8a, 0x87, 0x94);
+    g_pal[C_TEXT] = Rgb(0xe9, 0xe9, 0xed);
+    g_pal[C_ACCENTHI] = Rgb(0xd2, 0xce, 0xfd);
+    g_pal[C_WHITE] = Rgb(0xff, 0xff, 0xff);
+}
+inline int Rd(COLORREF c) { return c & 0xFF; }
+inline int Gr(COLORREF c) { return (c >> 8) & 0xFF; }
+inline int Bl(COLORREF c) { return (c >> 16) & 0xFF; }
 
 // Атрибуты (fg | bg<<4).
 inline WORD Attr(int fg, int bg) {
@@ -378,6 +397,41 @@ void RenderExit(Canvas& cv, const State& s) {
     }
 }
 
+// Экран окружения - показывается, пока идёт скан контейнеров. Если чего-то
+// не хватает, прямо тут написано, что и откуда скачать (ТЗ 3).
+void RenderEnvironment(Canvas& cv, const Environment& env,
+                       const std::wstring& status) {
+    cv.Clear(A_BG);
+    cv.Box(0, 0, W, H, A_BORDER);
+    cv.Text(2, 0, L" Окружение ", A_ACC);
+    int y = 2;
+    for (const Capability& c : env.caps) {
+        std::wstring mark = c.state == CapState::Present   ? L"[+]"
+                            : c.state == CapState::Partial ? L"[~]"
+                                                           : L"[-]";
+        WORD a = c.state == CapState::Present ? A_ACC : A_DIM;
+        cv.Text(3, y, mark + L" " + c.name +
+                          (c.detail.empty() ? L"" : L"  " + c.detail),
+                a, W - 6);
+        if (c.state != CapState::Present && !c.hint.empty()) {
+            cv.Text(7, y + 1, L"↓ " + c.hint, A_DIM, W - 10);
+            y += 2;
+        } else {
+            y += 1;
+        }
+    }
+    y += 1;
+    cv.Text(3, y, L"Способы копирования:", A_DIM);
+    y += 1;
+    for (const CopyBackend& b : env.backends) {
+        std::wstring mark = b.available ? L"[+]" : L"[-]";
+        cv.Text(3, y, mark + L" " + b.name, b.available ? A_ACC : A_DIM, W - 6);
+        y += 1;
+    }
+    cv.Fill(2, H - 2, W - 4, 1, A_BG);
+    cv.Text(3, H - 2, status, A_ACC, W - 6);
+}
+
 void Render(Canvas& cv, const State& s) {
     if (s.modal == Modal::Result) { RenderResult(cv, s); return; }
     if (s.screen == Screen::Tokens) RenderTokens(cv, s);
@@ -392,59 +446,105 @@ void Render(Canvas& cv, const State& s) {
 }
 
 // --- Консоль ----------------------------------------------------------------
+// Два пути вывода:
+//   VT (Windows Terminal / Win10+): alt-screen буфер + truecolor-escape'ы.
+//     Единственный надёжный способ на Windows Terminal: палитру консоли он
+//     игнорирует, а legacy WriteConsoleOutput не покрывает окно (артефакты,
+//     "просвечивание" приглашения). VT даёт точные цвета Nocturne и чистую
+//     очистку экрана.
+//   Legacy (Win7, где VT нет): ремап палитры + WriteConsoleOutput CHAR_INFO.
 struct Console {
     HANDLE out, in;
+    DWORD savedOutMode = 0, savedInMode = 0;
     CONSOLE_SCREEN_BUFFER_INFOEX savedInfo{};
-    DWORD savedInMode = 0;
     CONSOLE_CURSOR_INFO savedCursor{};
-    bool ok = false;
+    bool vt = false, ok = false;
+
+    void WriteVT(const std::wstring& s) {
+        DWORD w = 0;
+        WriteConsoleW(out, s.c_str(), static_cast<DWORD>(s.size()), &w, nullptr);
+    }
 
     void Init() {
+        InitPalette();
         out = GetStdHandle(STD_OUTPUT_HANDLE);
         in = GetStdHandle(STD_INPUT_HANDLE);
         if (out == INVALID_HANDLE_VALUE || in == INVALID_HANDLE_VALUE) return;
 
         savedInfo.cbSize = sizeof(savedInfo);
-        // Нет настоящей консоли (перенаправление) - в TUI идти нельзя.
-        if (!GetConsoleScreenBufferInfoEx(out, &savedInfo)) return;
+        if (!GetConsoleScreenBufferInfoEx(out, &savedInfo)) return;  // нет консоли
+        GetConsoleMode(out, &savedOutMode);
         GetConsoleMode(in, &savedInMode);
         GetConsoleCursorInfo(out, &savedCursor);
 
-        // Подстраиваемся под фактическое окно, а не навязываем свой размер.
-        // Так работает и в классическом conhost, и в Windows Terminal, где
-        // приложение окно не ресайзит.
         int cols = savedInfo.srWindow.Right - savedInfo.srWindow.Left + 1;
         int rows = savedInfo.srWindow.Bottom - savedInfo.srWindow.Top + 1;
         W = cols < 40 ? 40 : (cols > 200 ? 200 : cols);
         H = rows < 12 ? 12 : (rows > 60 ? 60 : rows);
 
-        // Палитра Nocturne + буфер под размер окна (без прокрутки).
-        CONSOLE_SCREEN_BUFFER_INFOEX info = savedInfo;
-        info.ColorTable[C_BG] = Rgb(0x16, 0x18, 0x26);
-        info.ColorTable[C_SURFACE] = Rgb(0x23, 0x25, 0x32);
-        info.ColorTable[C_NEUTRAL] = Rgb(0x29, 0x2b, 0x31);
-        info.ColorTable[C_ACCENT] = Rgb(0x91, 0x84, 0xd9);
-        info.ColorTable[C_ACCENTHI] = Rgb(0xd2, 0xce, 0xfd);
-        info.ColorTable[C_DIM] = Rgb(0x8a, 0x87, 0x94);
-        info.ColorTable[C_TEXT] = Rgb(0xe9, 0xe9, 0xed);
-        info.ColorTable[C_WHITE] = Rgb(0xff, 0xff, 0xff);
-        info.wAttributes = A_BG;
-        info.dwSize.X = static_cast<SHORT>(W);
-        info.dwSize.Y = static_cast<SHORT>(H);
-        info.srWindow.Left = 0;
-        info.srWindow.Top = 0;
-        info.srWindow.Right = static_cast<SHORT>(W - 1);
-        info.srWindow.Bottom = static_cast<SHORT>(H - 1);
-        SetConsoleScreenBufferInfoEx(out, &info);
-
-        CONSOLE_CURSOR_INFO cur = savedCursor;
-        cur.bVisible = FALSE;
-        SetConsoleCursorInfo(out, &cur);
+        // Пробуем включить VT.
+        DWORD om = savedOutMode | ENABLE_VIRTUAL_TERMINAL_PROCESSING |
+                   DISABLE_NEWLINE_AUTO_RETURN;
+        vt = SetConsoleMode(out, om) != 0;
         SetConsoleMode(in, ENABLE_EXTENDED_FLAGS);  // без quick-edit/эха
+
+        if (vt) {
+            WriteVT(L"\x1b[?1049h");  // альтернативный экран (сохраняет консоль)
+            WriteVT(L"\x1b[?25l");    // спрятать курсор
+        } else {
+            // Legacy: ремап палитры + буфер под окно.
+            CONSOLE_SCREEN_BUFFER_INFOEX info = savedInfo;
+            info.ColorTable[C_BG] = g_pal[C_BG];
+            info.ColorTable[C_SURFACE] = g_pal[C_SURFACE];
+            info.ColorTable[C_NEUTRAL] = g_pal[C_NEUTRAL];
+            info.ColorTable[C_ACCENT] = g_pal[C_ACCENT];
+            info.ColorTable[C_ACCENTHI] = g_pal[C_ACCENTHI];
+            info.ColorTable[C_DIM] = g_pal[C_DIM];
+            info.ColorTable[C_TEXT] = g_pal[C_TEXT];
+            info.ColorTable[C_WHITE] = g_pal[C_WHITE];
+            info.wAttributes = A_BG;
+            info.dwSize.X = static_cast<SHORT>(W);
+            info.dwSize.Y = static_cast<SHORT>(H);
+            info.srWindow.Left = 0;
+            info.srWindow.Top = 0;
+            info.srWindow.Right = static_cast<SHORT>(W - 1);
+            info.srWindow.Bottom = static_cast<SHORT>(H - 1);
+            SetConsoleScreenBufferInfoEx(out, &info);
+            CONSOLE_CURSOR_INFO cur = savedCursor;
+            cur.bVisible = FALSE;
+            SetConsoleCursorInfo(out, &cur);
+        }
         ok = true;
     }
 
-    void Present(const Canvas& cv) {
+    void PresentVT(const Canvas& cv) {
+        std::wstring o;
+        o.reserve(W * H * 2);
+        WORD cur = 0xFFFF;
+        for (int y = 0; y < H; ++y) {
+            wchar_t pos[16];
+            swprintf(pos, 16, L"\x1b[%d;1H", y + 1);
+            o += pos;
+            for (int x = 0; x < W; ++x) {
+                const CHAR_INFO& ci = cv.cells[y * W + x];
+                if (ci.Attributes != cur) {
+                    cur = ci.Attributes;
+                    COLORREF fg = g_pal[cur & 0x0F];
+                    COLORREF bg = g_pal[(cur >> 4) & 0x0F];
+                    wchar_t seq[48];
+                    swprintf(seq, 48, L"\x1b[38;2;%d;%d;%d;48;2;%d;%d;%dm",
+                             Rd(fg), Gr(fg), Bl(fg), Rd(bg), Gr(bg), Bl(bg));
+                    o += seq;
+                }
+                wchar_t ch = ci.Char.UnicodeChar;
+                o += (ch ? ch : L' ');
+            }
+        }
+        o += L"\x1b[0m";
+        WriteVT(o);
+    }
+
+    void PresentLegacy(const Canvas& cv) {
         COORD size = {static_cast<SHORT>(W), static_cast<SHORT>(H)};
         COORD org = {0, 0};
         SMALL_RECT region = {0, 0, static_cast<SHORT>(W - 1),
@@ -452,11 +552,21 @@ struct Console {
         WriteConsoleOutputW(out, cv.cells.data(), size, org, &region);
     }
 
+    void Present(const Canvas& cv) {
+        if (vt) PresentVT(cv);
+        else PresentLegacy(cv);
+    }
+
     void Restore() {
         if (!ok) return;
-        SetConsoleScreenBufferInfoEx(out, &savedInfo);
+        if (vt) {
+            WriteVT(L"\x1b[0m\x1b[?25h\x1b[?1049l");  // курсор, основной экран
+            SetConsoleMode(out, savedOutMode);
+        } else {
+            SetConsoleScreenBufferInfoEx(out, &savedInfo);
+            SetConsoleCursorInfo(out, &savedCursor);
+        }
         SetConsoleMode(in, savedInMode);
-        SetConsoleCursorInfo(out, &savedCursor);
     }
 };
 
@@ -507,19 +617,27 @@ int RunTui() {
 
     Canvas cv;
 
-    // Экран загрузки: инвентаризация сканирует токены через rtComLite и может
-    // занять несколько секунд. Показываем сообщение сразу, чтобы не выглядело
-    // зависшим.
-    cv.Clear(A_BG);
-    cv.Box(0, 0, W, H, A_BORDER);
-    cv.Text(W / 2 - 20, H / 2 - 1, L"Чтение контейнеров и опрос токенов…", A_ACC);
-    cv.Text(W / 2 - 20, H / 2 + 1, L"Это может занять несколько секунд.", A_DIM);
+    // Пока идёт долгий скан токенов - показываем окружение (ТЗ 3): что
+    // установлено, а чего не хватает и где скачать. Проба окружения быстрая
+    // (реестр/файлы), инвентаризация - медленная (rtComLite), поэтому сначала
+    // рисуем окружение, потом сканируем.
+    Environment env = ProbeEnvironment();
+    RenderEnvironment(cv, env, L"Идёт опрос токенов и чтение контейнеров…");
     con.Present(cv);
 
     State s;
     s.items = EnumerateContainers();
     s.toks = BuildTokens(s.items);
     if (s.toks.empty()) {
+        // Показать окружение и подсказку, дать прочитать, выйти по клавише.
+        RenderEnvironment(cv, env,
+                          L"Контейнеров не найдено. Проверьте носитель. "
+                          L"Любая клавиша — выход.");
+        con.Present(cv);
+        INPUT_RECORD rec;
+        DWORD rd = 0;
+        while (ReadConsoleInputW(con.in, &rec, 1, &rd))
+            if (rec.EventType == KEY_EVENT && rec.Event.KeyEvent.bKeyDown) break;
         con.Restore();
         return 0;
     }

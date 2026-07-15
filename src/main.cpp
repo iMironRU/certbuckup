@@ -122,14 +122,18 @@ int main(int argc, char** argv) {
 
     bool verbose = false;
     bool envOnly = false;
+    bool textList = false;           // --list: текстовый вывод вместо TUI
     int backupIndex = 0;             // 1-based номер строки для --backup
     std::wstring targetBase;         // --to; по умолчанию папка cert рядом с exe
     for (int i = 1; i < argc; ++i) {
         std::string a = argv[i];
         if (a == "--help" || a == "-h") {
             OutLine(L"CertMigrator - инвентаризация и резервирование КЭП КриптоПро");
-            OutLine(L"Использование: cert-migrator [-v] [--env] [--backup N] [--to DIR]");
-            OutLine(L"  -v          подробно: unique-имя, ОГРН, тип провайдера");
+            OutLine(L"Без параметров запускается интерфейс (TUI).");
+            OutLine(L"Использование: cert-migrator [--list [-v]] [--env] [--backup N] [--to DIR]");
+            OutLine(L"  (без флагов) запустить интерфейс");
+            OutLine(L"  --list      текстовый список контейнеров");
+            OutLine(L"  -v          к --list: unique-имя, ОГРН, тип провайдера");
             OutLine(L"  --env       только проверка окружения");
             OutLine(L"  --scan      диагностика rtComLite (папки-контейнеры)");
             OutLine(L"  --backup N  скопировать контейнер №N в DIR\\ИНН.ММГГ");
@@ -137,6 +141,7 @@ int main(int argc, char** argv) {
             return 0;
         }
         if (a == "-v" || a == "--verbose") verbose = true;
+        if (a == "--list") textList = true;
         if (a == "--env") envOnly = true;
         if (a == "--tui") return certmig::RunTui();
         if (a == "--tui-dump") return certmig::RunTuiDump();
@@ -167,6 +172,9 @@ int main(int argc, char** argv) {
             return 0;
         }
     }
+
+    // По умолчанию (без текстовых флагов) - интерфейс.
+    if (!envOnly && !textList && backupIndex == 0) return certmig::RunTui();
 
     // ТЗ 3: проба окружения. Показываем, что есть и что из этого можно.
     certmig::Environment env = certmig::ProbeEnvironment();

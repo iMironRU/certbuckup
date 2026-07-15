@@ -2,6 +2,7 @@
 
 #include <windows.h>
 #include <winscard.h>
+#include <urlmon.h>
 
 #include "resolver.h"
 
@@ -92,6 +93,37 @@ bool SmartCardServiceUp() {
 }
 
 }  // namespace
+
+bool InstallRtComLite(std::wstring* status) {
+    wchar_t tmp[MAX_PATH];
+    DWORD n = GetTempPathW(MAX_PATH, tmp);
+    if (n == 0 || n >= MAX_PATH) {
+        *status = L"нет временной папки";
+        return false;
+    }
+    std::wstring dest = std::wstring(tmp) + L"rtComLite.exe";
+
+    *status = L"скачиваю rtComLite…";
+    // URLDownloadToFile надёжнее при инициализированном COM на этом потоке.
+    HRESULT init = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
+    HRESULT hr = URLDownloadToFileW(nullptr,
+                                    L"https://help.kontur.ru/rtComLite.exe",
+                                    dest.c_str(), 0, nullptr);
+    if (SUCCEEDED(init)) CoUninitialize();
+    if (FAILED(hr)) {
+        *status = L"не удалось скачать (нет сети?)";
+        return false;
+    }
+    // Запускаем установщик - у него собственный интерфейс.
+    HINSTANCE r = ShellExecuteW(nullptr, L"open", dest.c_str(), nullptr, nullptr,
+                                SW_SHOWNORMAL);
+    if (reinterpret_cast<INT_PTR>(r) <= 32) {
+        *status = L"не удалось запустить установщик";
+        return false;
+    }
+    *status = L"установщик запущен — завершите установку и перезапустите";
+    return true;
+}
 
 Environment ProbeEnvironment() {
     Environment env;

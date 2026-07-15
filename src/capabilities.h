@@ -48,4 +48,10 @@ struct Environment {
 
 Environment ProbeEnvironment();
 
+// Скачивает и запускает установщик rtComLite (компонент Рутокен от Контура),
+// если его нет. Загрузка с официального адреса Контура во временную папку,
+// затем запуск установщика (у него свой UI). status - краткий итог для показа.
+// Возвращает true, если установщик запущен.
+bool InstallRtComLite(std::wstring* status);
+
 }  // namespace certmig

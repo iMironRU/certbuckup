@@ -731,6 +731,47 @@ int RunTui() {
     // рисуем окружение, потом сканируем.
     Environment env = ProbeEnvironment();
 
+    // Если rtComLite нет - без него не читать/копировать Рутокен. Показываем
+    // окружение и предлагаем скачать+установить (ТЗ 3).
+    auto rtMissing = [&]() {
+        for (const Capability& c : env.caps)
+            if (c.name.find(L"rtComLite") != std::wstring::npos)
+                return c.state == CapState::Missing;
+        return false;
+    };
+    while (rtMissing()) {
+        RenderEnvironment(cv, env,
+                          L"rtComLite не установлен.  [D] скачать и установить "
+                          L"·  [Enter] продолжить без него  ·  [F10] выход");
+        con.Present(cv);
+        INPUT_RECORD rec;
+        DWORD rd = 0;
+        if (!ReadConsoleInputW(con.in, &rec, 1, &rd) || rd == 0) continue;
+        if (rec.EventType != KEY_EVENT || !rec.Event.KeyEvent.bKeyDown) continue;
+        WORD vk = rec.Event.KeyEvent.wVirtualKeyCode;
+        if (vk == VK_F10) { con.Restore(); return 0; }
+        if (vk == VK_RETURN) break;
+        if (vk == 'D') {
+            std::wstring st;
+            RenderEnvironment(cv, env, L"Скачиваю и запускаю установщик…");
+            con.Present(cv);
+            InstallRtComLite(&st);
+            RenderEnvironment(cv, env,
+                              st + L"   [Enter] продолжить · [F10] выход");
+            con.Present(cv);
+            // Ждём реакции; повторная проба окружения после установки.
+            for (;;) {
+                if (!ReadConsoleInputW(con.in, &rec, 1, &rd) || rd == 0) continue;
+                if (rec.EventType != KEY_EVENT || !rec.Event.KeyEvent.bKeyDown)
+                    continue;
+                WORD k = rec.Event.KeyEvent.wVirtualKeyCode;
+                if (k == VK_F10) { con.Restore(); return 0; }
+                if (k == VK_RETURN) break;
+            }
+            env = ProbeEnvironment();  // вдруг уже установили
+        }
+    }
+
     // Скан в фоне, индикатор в главном потоке.
     ScanJob job;
     HANDLE th = CreateThread(nullptr, 0, ScanThreadProc, &job, 0, nullptr);

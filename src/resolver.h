@@ -11,6 +11,7 @@
 #include <windows.h>
 #include <wincrypt.h>
 
+#include <functional>
 #include <string>
 #include <vector>
 
@@ -103,6 +104,16 @@ CspInfo DetectCsp();
 // Перечислить все контейнеры по всем типам провайдера и разрешить
 // связь с сертификатом для каждого.
 std::vector<ContainerInfo> EnumerateContainers();
+
+// То же, но вызывает onItem по мере готовности каждого контейнера (для
+// прогрессивной отрисовки - список наполняется на глазах). Не уточняет тип
+// носителя (это RefineMediumByScan, вызвать после).
+void EnumerateContainersProgressive(
+    const std::function<void(const ContainerInfo&)>& onItem);
+
+// Уточнить тип носителя (файловый/аппаратный) сканом токенов. Вызывается
+// после прогрессивного перечисления.
+void RefineMediumByScan(std::vector<ContainerInfo>* items);
 
 // Сколько дней осталось до NotAfter. Отрицательное - сертификат истёк.
 int DaysUntil(const FILETIME& ft);

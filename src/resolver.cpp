@@ -331,11 +331,14 @@ void RefineMediumByScan(std::vector<ContainerInfo>* items) {
     }
 }
 
-std::vector<ContainerInfo> EnumerateContainers() {
-    std::vector<ContainerInfo> out;
-    // Один и тот же физический контейнер виден под всеми типами провайдера
-    // (75/80/81), поэтому без дедупликации каждый попадает в вывод трижды.
-    // Ключ - PP_UNIQUE_CONTAINER: он привязан к носителю и не зависит от типа.
+void EnumerateContainersProgressive(
+    const std::function<void(const ContainerInfo&)>& onItem) {
+    // Один и тот же контейнер виден под всеми типами провайдера (75/80/81).
+    // Дедуп по ИМЕНИ делаем ДО ResolveOne: открытие контейнера на токене -
+    // смарт-карточный I/O (~секунды), и без раннего дедупа каждый контейнер
+    // читался бы трижды. seen - вторичный дедуп по PP_UNIQUE_CONTAINER (один
+    // контейнер на разных носителях).
+    std::set<std::wstring> seenNames;
     std::set<std::wstring> seen;
 
     for (size_t i = 0; i < kProviderCount; ++i) {
@@ -364,7 +367,9 @@ std::vector<ContainerInfo> EnumerateContainers() {
 
             std::wstring name =
                 AnsiToWide(reinterpret_cast<const char*>(buf.data()));
-            if (!name.empty()) {
+            // Раннее прерывание: имя уже встречалось под другим провайдером -
+            // не открываем контейнер повторно (главная экономия времени).
+            if (!name.empty() && seenNames.insert(name).second) {
                 ContainerInfo info;
                 ResolveOne(pt, name, &info);
                 // Дедуп по уникальному имени. Если его получить не удалось,
@@ -372,7 +377,7 @@ std::vector<ContainerInfo> EnumerateContainers() {
                 // чем потерять носитель.
                 const std::wstring& key =
                     info.uniqueName.empty() ? info.name : info.uniqueName;
-                if (seen.insert(key).second) out.push_back(info);
+                if (seen.insert(key).second) onItem(info);
             }
 
             flags = CRYPT_NEXT;
@@ -380,7 +385,12 @@ std::vector<ContainerInfo> EnumerateContainers() {
 
         CryptReleaseContext(prov, 0);
     }
+}
 
+std::vector<ContainerInfo> EnumerateContainers() {
+    std::vector<ContainerInfo> out;
+    EnumerateContainersProgressive(
+        [&out](const ContainerInfo& c) { out.push_back(c); });
     RefineMediumByScan(&out);
     return out;
 }

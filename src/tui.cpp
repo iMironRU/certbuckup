@@ -2,6 +2,7 @@
 
 #include <windows.h>
 
+#include <mutex>
 #include <string>
 #include <vector>
 
@@ -652,10 +653,19 @@ struct Console {
 // поток мог крутить индикатор "идёт работа". COM (rtComLite) инициализируется
 // внутри ScanToken на том потоке, где вызван, - на рабочем потоке это штатно.
 struct ScanJob {
-    std::vector<ContainerInfo> items;
+    std::mutex mtx;
+    std::vector<ContainerInfo> items;  // наполняется прогрессивно
 };
 DWORD WINAPI ScanThreadProc(LPVOID p) {
-    static_cast<ScanJob*>(p)->items = EnumerateContainers();
+    ScanJob* j = static_cast<ScanJob*>(p);
+    // Контейнеры добавляются по мере чтения - список наполняется на глазах.
+    EnumerateContainersProgressive([j](const ContainerInfo& c) {
+        std::lock_guard<std::mutex> lk(j->mtx);
+        j->items.push_back(c);
+    });
+    // Уточнение типа носителя - после (нужен полный набор).
+    std::lock_guard<std::mutex> lk(j->mtx);
+    RefineMediumByScan(&j->items);
     return 0;
 }
 
@@ -876,15 +886,21 @@ int RunTui() {
         }
     }
 
-    // Скан в фоне, индикатор в главном потоке.
+    // Скан в фоне, индикатор с живым счётчиком найденного в главном потоке.
     ScanJob job;
     HANDLE th = CreateThread(nullptr, 0, ScanThreadProc, &job, 0, nullptr);
     if (th) {
         const wchar_t spin[] = L"|/-\\";
         int frame = 0;
         while (WaitForSingleObject(th, 0) == WAIT_TIMEOUT) {
+            size_t n;
+            {
+                std::lock_guard<std::mutex> lk(job.mtx);
+                n = job.items.size();
+            }
             std::wstring status = std::wstring(1, spin[frame % 4]) +
-                                  L" Опрос токенов и чтение контейнеров" +
+                                  L" Чтение контейнеров — найдено: " +
+                                  std::to_wstring(n) +
                                   std::wstring(frame % 4, L'.');
             RenderEnvironment(cv, env, status);
             con.Present(cv);
@@ -893,14 +909,16 @@ int RunTui() {
         }
         CloseHandle(th);
     } else {
-        // Не удалось создать поток - синхронно, без анимации.
         RenderEnvironment(cv, env, L"Опрос токенов и чтение контейнеров…");
         con.Present(cv);
         job.items = EnumerateContainers();
     }
 
     State s;
-    s.items = std::move(job.items);
+    {
+        std::lock_guard<std::mutex> lk(job.mtx);
+        s.items = std::move(job.items);
+    }
     s.toks = BuildTokens(s.items);
     s.cspMajor = _wtoi(DetectCsp().version.c_str());  // "5.0" -> 5
     if (s.toks.empty()) {

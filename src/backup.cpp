@@ -96,6 +96,21 @@ void AppendIndex(const std::wstring& targetBase, const ContainerInfo& c,
     CloseHandle(h);
 }
 
+// Снимает признак неэкспортируемости в буфере header.key: байт 25, бит 0x80
+// (см. память export-flag-and-header-checksum). Работает только на сборках CSP
+// без контроля целостности заголовка (гейт по версии - в UI). Возвращает
+// false, если структура не та (не трогаем).
+bool ClearExportFlagInFiles(std::vector<ContainerFile>* files) {
+    for (ContainerFile& f : *files) {
+        if (f.name == L"header.key") {
+            if (f.data.size() <= 25) return false;
+            f.data[25] |= 0x80;
+            return true;
+        }
+    }
+    return false;
+}
+
 // Ридер rtComLite, на котором лежит папка folderId (имена не совпадают с FQCN).
 std::wstring FindReaderForFolder(int folderId) {
     for (const std::wstring& r : EnumReaders()) {
@@ -136,7 +151,8 @@ std::wstring BackupTargetPath(const ContainerInfo& c,
 }
 
 BackupResult BackupToFolder(const ContainerInfo& c,
-                            const std::wstring& targetBase, bool overwrite) {
+                            const std::wstring& targetBase, bool overwrite,
+                            bool clearExportFlag) {
     BackupResult r;
     std::wstring subj = c.subjectCN + L" / " + c.Inn();
 
@@ -192,6 +208,8 @@ BackupResult BackupToFolder(const ContainerInfo& c,
         return r;
     }
 
+    if (clearExportFlag) ClearExportFlagInFiles(&r.files);
+
     for (const ContainerFile& f : r.files) {
         if (!WriteBytes(r.dest + L"\\" + f.name, f.data)) {
             r.message = L"Не удалось записать файл: " + f.name;
@@ -239,7 +257,8 @@ std::wstring RegKeyPath(const std::wstring& sid, const std::wstring& name) {
 
 }  // namespace
 
-BackupResult BackupToRegistry(const ContainerInfo& c, bool overwrite) {
+BackupResult BackupToRegistry(const ContainerInfo& c, bool overwrite,
+                              bool clearExportFlag) {
     BackupResult r;
     std::wstring subj = c.subjectCN + L" / " + c.Inn();
 
@@ -299,6 +318,8 @@ BackupResult BackupToRegistry(const ContainerInfo& c, bool overwrite) {
                   L"ошибка: " + r.message);
         return r;
     }
+
+    if (clearExportFlag) ClearExportFlagInFiles(&r.files);
 
     for (const ContainerFile& f : r.files) {
         RegSetValueExW(key, f.name.c_str(), 0, REG_BINARY, f.data.data(),

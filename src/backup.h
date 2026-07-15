@@ -35,12 +35,14 @@ std::wstring BackupTargetPath(const ContainerInfo& c,
 // перезаписывает.
 BackupResult BackupToFolder(const ContainerInfo& c,
                             const std::wstring& targetBase,
-                            bool overwrite = false);
+                            bool overwrite = false,
+                            bool clearExportFlag = false);
 
 // Копирует контейнер в реестр Windows (хранилище контейнеров КриптоПро):
 // 6 файлов как бинарные значения под ключом Crypto Pro Settings USERS
 // <SID> Keys <8.3-имя>. Требует прав администратора (запись в HKLM).
-BackupResult BackupToRegistry(const ContainerInfo& c, bool overwrite = false);
+BackupResult BackupToRegistry(const ContainerInfo& c, bool overwrite = false,
+                              bool clearExportFlag = false);
 
 // Есть ли уже такой контейнер в реестре (для предупреждения о перезаписи).
 bool RegistryContainerExists(const ContainerInfo& c);

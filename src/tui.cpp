@@ -206,6 +206,8 @@ struct State {
     int tokCursor = 0, certCursor = 0, destCursor = 2, exitCursor = 0;
     int overwriteCursor = 0;  // 0 = перезаписать, 1 = отмена
     int selTok = 0;
+    int cspMajor = 0;         // мажор версии CSP: снятие флага показываем
+                              // только для 4.x (в 5.x контроль заголовка)
     bool flagClear = false;   // чекбокс "снять признак неэкспортируемости"
     std::wstring resultMsg;
     int resultKind = 0;       // 0 ok, 1 пропуск, 2 ошибка
@@ -328,7 +330,9 @@ void RenderDest(Canvas& cv, const State& s) {
         ry += 2;
     }
     ry += 1;
-    if (c.exportable == Exportable::No) {
+    // Чекбокс снятия признака - только для CSP 4.x. В 5.x заголовок под
+    // контролем целостности, флип его ломает, поэтому там не предлагаем.
+    if (c.exportable == Exportable::No && s.cspMajor > 0 && s.cspMajor <= 4) {
         std::wstring cb = s.flagClear ? L"[✓] " : L"[ ] ";
         cv.Text(x + 4, ry, cb + L"Снять признак неэкспортируемости (пробел)",
                 A_SURF, w - 8);
@@ -674,15 +678,16 @@ void DoCopy(State& s, bool overwrite) {
         row.ok = false;
         row.status = L"в разработке";
     } else {
+        // Снятие флага - только если чекбокс доступен (CSP 4.x) и отмечен.
+        bool clr = s.flagClear && s.cspMajor > 0 && s.cspMajor <= 4;
         BackupResult br = d.kind == DEST_REGISTRY
-                              ? BackupToRegistry(c, overwrite)
-                              : BackupToFolder(c, d.path, overwrite);
+                              ? BackupToRegistry(c, overwrite, clr)
+                              : BackupToFolder(c, d.path, overwrite, clr);
         s.resultKind = br.ok ? 0 : br.skipped ? 1 : 2;
         s.resultMsg = OrgName(c) + L" · ИНН " + LegalInn(c) + L"  —  " + br.message;
         row.ok = br.ok;
         row.status = br.ok ? L"Успешно" : br.skipped ? L"Пропущено" : L"Ошибка";
-        if (br.ok && s.flagClear)
-            s.resultMsg += L"  (снятие признака — следующий этап)";
+        if (br.ok && clr) s.resultMsg += L"  (признак снят)";
     }
     s.log.push_back(row);
     s.modal = Modal::Result;
@@ -748,6 +753,7 @@ int RunTui() {
     State s;
     s.items = std::move(job.items);
     s.toks = BuildTokens(s.items);
+    s.cspMajor = _wtoi(DetectCsp().version.c_str());  // "5.0" -> 5
     if (s.toks.empty()) {
         // Показать окружение и подсказку, дать прочитать, выйти по клавише.
         RenderEnvironment(cv, env,
@@ -812,7 +818,8 @@ int RunTui() {
             int n = static_cast<int>(s.dests.size());
             if (vk == VK_UP) s.destCursor = (s.destCursor + n - 1) % n;
             else if (vk == VK_DOWN) s.destCursor = (s.destCursor + 1) % n;
-            else if (vk == VK_SPACE && c.exportable == Exportable::No)
+            else if (vk == VK_SPACE && c.exportable == Exportable::No &&
+                     s.cspMajor > 0 && s.cspMajor <= 4)
                 s.flagClear = !s.flagClear;
             else if (vk == VK_ESCAPE) s.modal = Modal::None;
             else if (vk == VK_RETURN) RequestCopy(s);

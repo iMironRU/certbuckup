@@ -1,6 +1,7 @@
 #include "backup.h"
 
 #include <windows.h>
+#include <sddl.h>
 
 #include "journal.h"
 #include "rutoken.h"
@@ -205,6 +206,123 @@ BackupResult BackupToFolder(const ContainerInfo& c,
     r.ok = true;
     r.message = L"Скопировано: " + r.dest;
     return r;
+}
+
+namespace {
+
+// SID текущего пользователя строкой (S-1-5-...). Реестровые контейнеры
+// КриптоПро лежат по-пользовательски.
+std::wstring CurrentUserSid() {
+    HANDLE tok = nullptr;
+    if (!OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &tok)) return L"";
+    DWORD len = 0;
+    GetTokenInformation(tok, TokenUser, nullptr, 0, &len);
+    std::vector<BYTE> buf(len);
+    std::wstring sid;
+    if (len && GetTokenInformation(tok, TokenUser, buf.data(), len, &len)) {
+        TOKEN_USER* tu = reinterpret_cast<TOKEN_USER*>(buf.data());
+        LPWSTR s = nullptr;
+        if (ConvertSidToStringSidW(tu->User.Sid, &s)) {
+            sid = s;
+            LocalFree(s);
+        }
+    }
+    CloseHandle(tok);
+    return sid;
+}
+
+// Путь ключа контейнера в реестре. 32-битный процесс: HKLM\SOFTWARE сам
+// редиректится в WOW6432Node, где КриптоПро и держит контейнеры.
+std::wstring RegKeyPath(const std::wstring& sid, const std::wstring& name) {
+    return L"SOFTWARE\\Crypto Pro\\Settings\\USERS\\" + sid + L"\\Keys\\" + name;
+}
+
+}  // namespace
+
+BackupResult BackupToRegistry(const ContainerInfo& c, bool overwrite) {
+    BackupResult r;
+    std::wstring subj = c.subjectCN + L" / " + c.Inn();
+
+    if (c.medium == KeyMedium::HardWare) {
+        r.message = L"Контейнер аппаратный — копировать нечего.";
+        return r;
+    }
+    if (c.medium != KeyMedium::FileToken || c.folderId < 0) {
+        r.message = L"В реестр копируется только файловый контейнер с токена.";
+        return r;
+    }
+
+    r.reader = FindReaderForFolder(c.folderId);
+    if (r.reader.empty()) {
+        r.message = L"Не найден токен с контейнером — переподключите носитель.";
+        return r;
+    }
+    std::wstring err;
+    if (!ReadContainer(r.reader, c.folderId, &r.files, &err)) {
+        r.message = L"Ошибка чтения контейнера: " + err;
+        return r;
+    }
+
+    std::wstring sid = CurrentUserSid();
+    if (sid.empty()) {
+        r.message = L"Не удалось определить SID пользователя.";
+        return r;
+    }
+    r.name83 = Name83(c);
+    std::wstring path = RegKeyPath(sid, r.name83);
+    r.dest = L"реестр: " + r.name83;
+
+    // Уже есть?
+    HKEY h = nullptr;
+    if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, path.c_str(), 0, KEY_READ, &h) ==
+        ERROR_SUCCESS) {
+        RegCloseKey(h);
+        if (!overwrite) {
+            r.skipped = true;
+            r.message = L"Контейнер уже есть в реестре: " + r.name83;
+            JournalOp(L"backup-reg", subj, c.thumbprint, r.reader, r.dest,
+                      L"пропуск: уже существует");
+            return r;
+        }
+        RegDeleteTreeW(HKEY_LOCAL_MACHINE, path.c_str());
+    }
+
+    HKEY key = nullptr;
+    LONG rc = RegCreateKeyExW(HKEY_LOCAL_MACHINE, path.c_str(), 0, nullptr, 0,
+                              KEY_WRITE, nullptr, &key, nullptr);
+    if (rc != ERROR_SUCCESS) {
+        r.message = (rc == ERROR_ACCESS_DENIED)
+                        ? L"Нет прав на запись в реестр — запустите от "
+                          L"администратора."
+                        : L"Ошибка создания ключа реестра.";
+        JournalOp(L"backup-reg", subj, c.thumbprint, r.reader, r.dest,
+                  L"ошибка: " + r.message);
+        return r;
+    }
+
+    for (const ContainerFile& f : r.files) {
+        RegSetValueExW(key, f.name.c_str(), 0, REG_BINARY, f.data.data(),
+                       static_cast<DWORD>(f.data.size()));
+    }
+    RegCloseKey(key);
+
+    JournalOp(L"backup-reg", subj, c.thumbprint, r.reader, r.dest, L"OK");
+    r.ok = true;
+    r.message = L"Скопировано в реестр: " + r.name83;
+    return r;
+}
+
+bool RegistryContainerExists(const ContainerInfo& c) {
+    std::wstring sid = CurrentUserSid();
+    if (sid.empty()) return false;
+    std::wstring path = RegKeyPath(sid, Name83(c));
+    HKEY h = nullptr;
+    if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, path.c_str(), 0, KEY_READ, &h) ==
+        ERROR_SUCCESS) {
+        RegCloseKey(h);
+        return true;
+    }
+    return false;
 }
 
 }  // namespace certmig

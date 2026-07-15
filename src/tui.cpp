@@ -183,10 +183,11 @@ std::wstring LegalInn(const ContainerInfo& c) {
 enum class Screen { Tokens, Certs };
 enum class Modal { None, Dest, Blocked, Info, Exit, Result, Overwrite };
 
+enum DestKind { DEST_FOLDER, DEST_REGISTRY, DEST_TODO };
 struct DestOpt {
     std::wstring label;
-    std::wstring path;      // куда (для реализованных)
-    bool implemented;
+    std::wstring path;      // куда (для папок)
+    int kind;               // DestKind
 };
 
 struct LogRow {
@@ -211,10 +212,10 @@ struct State {
     std::vector<LogRow> log;
 
     std::vector<DestOpt> dests = {
-        {L"Диск D:\\", L"D:\\Сертификаты", true},
-        {L"Реестр Windows", L"", false},
-        {L"Папка рядом с приложением", DefaultBackupDir(), true},
-        {L"Папка КриптоПро", L"", false},
+        {L"Диск D:\\", L"D:\\Сертификаты", DEST_FOLDER},
+        {L"Реестр Windows", L"", DEST_REGISTRY},
+        {L"Папка рядом с приложением", DefaultBackupDir(), DEST_FOLDER},
+        {L"Папка КриптоПро", L"", DEST_TODO},
     };
 };
 
@@ -317,9 +318,12 @@ void RenderDest(Canvas& cv, const State& s) {
         cv.Fill(x + 2, ry, w - 4, 2, A_SURF);
         std::wstring radio = sel ? L"(●) " : L"( ) ";
         std::wstring line = radio + d.label;
-        if (!d.implemented) line += L"  (в разработке)";
+        if (d.kind == DEST_TODO) line += L"  (в разработке)";
         cv.Text(x + 4, ry, line, sel ? A_SURFACC : A_SURF, w - 8);
-        std::wstring path = d.implemented ? d.path : L"—";
+        std::wstring path = d.kind == DEST_FOLDER ? d.path
+                            : d.kind == DEST_REGISTRY
+                                ? L"HKLM\\...\\Crypto Pro\\...\\Keys (нужен админ)"
+                                : L"—";
         cv.Text(x + 8, ry + 1, path, sel ? A_SURF : A_SURFDIM, w - 12);
         ry += 2;
     }
@@ -664,13 +668,15 @@ void DoCopy(State& s, bool overwrite) {
     row.inn = LegalInn(c);
     row.dest = d.label;
 
-    if (!d.implemented) {
+    if (d.kind == DEST_TODO) {
         s.resultKind = 2;
         s.resultMsg = L"Назначение «" + d.label + L"» ещё в разработке.";
         row.ok = false;
         row.status = L"в разработке";
     } else {
-        BackupResult br = BackupToFolder(c, d.path, overwrite);
+        BackupResult br = d.kind == DEST_REGISTRY
+                              ? BackupToRegistry(c, overwrite)
+                              : BackupToFolder(c, d.path, overwrite);
         s.resultKind = br.ok ? 0 : br.skipped ? 1 : 2;
         s.resultMsg = OrgName(c) + L" · ИНН " + LegalInn(c) + L"  —  " + br.message;
         row.ok = br.ok;
@@ -687,13 +693,16 @@ void DoCopy(State& s, bool overwrite) {
 void RequestCopy(State& s) {
     const ContainerInfo& c = s.items[s.toks[s.selTok].certIdx[s.certCursor]];
     const DestOpt& d = s.dests[s.destCursor];
-    if (d.implemented) {
-        std::wstring dest = BackupTargetPath(c, d.path);
-        if (GetFileAttributesW(dest.c_str()) != INVALID_FILE_ATTRIBUTES) {
-            s.overwriteCursor = 1;  // по умолчанию - отмена (безопаснее)
-            s.modal = Modal::Overwrite;
-            return;
-        }
+    bool exists = false;
+    if (d.kind == DEST_FOLDER)
+        exists = GetFileAttributesW(BackupTargetPath(c, d.path).c_str()) !=
+                 INVALID_FILE_ATTRIBUTES;
+    else if (d.kind == DEST_REGISTRY)
+        exists = RegistryContainerExists(c);
+    if (exists) {
+        s.overwriteCursor = 1;  // по умолчанию - отмена (безопаснее)
+        s.modal = Modal::Overwrite;
+        return;
     }
     DoCopy(s, false);
 }

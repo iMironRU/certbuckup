@@ -123,6 +123,7 @@ int main(int argc, char** argv) {
     bool verbose = false;
     bool envOnly = false;
     bool textList = false;           // --list: текстовый вывод вместо TUI
+    bool backupToReg = false;        // --backup-reg: копия в реестр
     int backupIndex = 0;             // 1-based номер строки для --backup
     std::wstring targetBase;         // --to; по умолчанию папка cert рядом с exe
     for (int i = 1; i < argc; ++i) {
@@ -146,6 +147,10 @@ int main(int argc, char** argv) {
         if (a == "--tui") return certmig::RunTui();
         if (a == "--tui-dump") return certmig::RunTuiDump();
         if (a == "--backup" && i + 1 < argc) backupIndex = atoi(argv[++i]);
+        if (a == "--backup-reg" && i + 1 < argc) {
+            backupIndex = atoi(argv[++i]);
+            backupToReg = true;
+        }
         if (a == "--to" && i + 1 < argc) {
             std::string t = argv[++i];
             int need = MultiByteToWideChar(CP_ACP, 0, t.c_str(), -1, nullptr, 0);
@@ -209,6 +214,12 @@ int main(int argc, char** argv) {
                 c.subjectCN + L" (" + c.Inn() + L"), до " +
                 certmig::FormatDate(c.notAfter));
         OutLine();
+        if (backupToReg) {
+            certmig::BackupResult r = certmig::BackupToRegistry(c);
+            OutLine(r.message);
+            OutLine(L"Журнал: " + certmig::JournalPath());
+            return r.ok ? 0 : 3;
+        }
         return BackupContainer(c, targetBase);
     }
 

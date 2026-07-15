@@ -37,6 +37,14 @@ BackupResult BackupToFolder(const ContainerInfo& c,
                             const std::wstring& targetBase,
                             bool overwrite = false);
 
+// Копирует контейнер в реестр Windows (хранилище контейнеров КриптоПро):
+// 6 файлов как бинарные значения под ключом Crypto Pro Settings USERS
+// <SID> Keys <8.3-имя>. Требует прав администратора (запись в HKLM).
+BackupResult BackupToRegistry(const ContainerInfo& c, bool overwrite = false);
+
+// Есть ли уже такой контейнер в реестре (для предупреждения о перезаписи).
+bool RegistryContainerExists(const ContainerInfo& c);
+
 // Путь к папке cert рядом с exe - цель по умолчанию.
 std::wstring DefaultBackupDir();
 

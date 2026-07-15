@@ -205,6 +205,7 @@ struct State {
     // Курсор назначения по умолчанию - "Папка рядом с приложением" (индекс 2).
     int tokCursor = 0, certCursor = 0, destCursor = 2, exitCursor = 0;
     int overwriteCursor = 0;  // 0 = перезаписать, 1 = отмена
+    bool eatDbl = false;      // проглотить двойной клик после перехода экрана
     int selTok = 0;
     int cspMajor = 0;         // мажор версии CSP: снятие флага показываем
                               // только для 4.x (в 5.x контроль заголовка)
@@ -256,7 +257,8 @@ void RenderTokens(Canvas& cv, const State& s) {
         }
         y += 3;
     }
-    DrawFooter(cv, L"↑↓ выбор   Enter открыть   F3 инфо   F10 выход");
+    DrawFooter(cv,
+               L"↑↓/колесо   Enter или клик — открыть   F3 инфо   F10 выход");
 }
 
 void RenderCerts(Canvas& cv, const State& s) {
@@ -293,7 +295,8 @@ void RenderCerts(Canvas& cv, const State& s) {
         y += 3;
     }
     DrawFooter(cv,
-               L"↑↓ выбор   F5 копировать   F3 инфо   Esc назад   F10 выход");
+               L"↑↓/колесо   F5 или 2×клик — копировать   F3 инфо   Esc назад "
+               L"  F10 выход");
 }
 
 void DrawDialog(Canvas& cv, int x, int y, int w, int h,
@@ -544,7 +547,10 @@ struct Console {
         DWORD om = savedOutMode | ENABLE_VIRTUAL_TERMINAL_PROCESSING |
                    DISABLE_NEWLINE_AUTO_RETURN;
         vt = SetConsoleMode(out, om) != 0;
-        SetConsoleMode(in, ENABLE_EXTENDED_FLAGS);  // без quick-edit/эха
+        // Мышь + события окна; ENABLE_EXTENDED_FLAGS выключает quick-edit
+        // (иначе клики уходят на выделение текста, а не в приложение).
+        SetConsoleMode(in, ENABLE_EXTENDED_FLAGS | ENABLE_MOUSE_INPUT |
+                               ENABLE_WINDOW_INPUT);
 
         if (vt) {
             WriteVT(L"\x1b[?1049h");  // альтернативный экран (сохраняет консоль)
@@ -716,6 +722,104 @@ void RequestCopy(State& s) {
     DoCopy(s, false);
 }
 
+// Индекс строки списка по координате Y. Строки: baseY + i*stride, каждая
+// занимает 2 текстовые линии.
+int HitRow(int y, int baseY, int stride, int count) {
+    for (int i = 0; i < count; ++i)
+        if (y == baseY + i * stride || y == baseY + i * stride + 1) return i;
+    return -1;
+}
+
+// Колесо мыши - навигация по текущему списку.
+void HandleWheel(State& s, bool up) {
+    if (s.modal == Modal::Dest) {
+        int n = static_cast<int>(s.dests.size());
+        s.destCursor = up ? (s.destCursor + n - 1) % n : (s.destCursor + 1) % n;
+        return;
+    }
+    if (s.modal != Modal::None) return;
+    if (s.screen == Screen::Tokens) {
+        int n = static_cast<int>(s.toks.size());
+        if (n) s.tokCursor = up ? (s.tokCursor + n - 1) % n : (s.tokCursor + 1) % n;
+    } else {
+        int n = static_cast<int>(s.toks[s.selTok].certIdx.size());
+        if (n) s.certCursor = up ? (s.certCursor + n - 1) % n : (s.certCursor + 1) % n;
+    }
+}
+
+// Левый клик (dbl - двойной). Действует как соответствующая клавиша.
+void HandleClick(State& s, int mx, int my, bool dbl, bool& running) {
+    // Простые модалки закрываются кликом.
+    if (s.modal == Modal::Info || s.modal == Modal::Blocked) {
+        s.modal = Modal::None;
+        return;
+    }
+    if (s.modal == Modal::Result) {
+        s.modal = Modal::None;
+        s.screen = Screen::Certs;
+        return;
+    }
+    if (s.modal == Modal::Exit) {
+        int w = 46, h = 9, x = (W - w) / 2, y = (H - h) / 2;
+        for (int i = 0; i < 2; ++i)
+            if (my == y + 3 + i && mx >= x && mx < x + w) {
+                if (i == 0) running = false;
+                else s.modal = Modal::None;
+                return;
+            }
+        return;
+    }
+    if (s.modal == Modal::Overwrite) {
+        int w = 60, h = 9, x = (W - w) / 2, y = (H - h) / 2;
+        for (int i = 0; i < 2; ++i)
+            if (my == y + 4 + i && mx >= x && mx < x + w) {
+                if (i == 0) DoCopy(s, true);
+                else s.modal = Modal::Dest;
+                return;
+            }
+        return;
+    }
+    if (s.modal == Modal::Dest) {
+        const ContainerInfo& c = s.items[s.toks[s.selTok].certIdx[s.certCursor]];
+        int w = W - 8 > 96 ? 96 : W - 8, h = 20, x = (W - w) / 2, y = (H - h) / 2;
+        int nd = static_cast<int>(s.dests.size());
+        for (int i = 0; i < nd; ++i)
+            if ((my == y + 4 + 2 * i || my == y + 4 + 2 * i + 1) && mx >= x &&
+                mx < x + w) {
+                s.destCursor = i;   // клик по назначению сразу подтверждает
+                RequestCopy(s);
+                return;
+            }
+        if (c.exportable == Exportable::No && s.cspMajor > 0 &&
+            s.cspMajor <= 4 && my == y + 13 && mx >= x && mx < x + w) {
+            s.flagClear = !s.flagClear;
+        }
+        return;
+    }
+
+    // Основные экраны.
+    if (s.screen == Screen::Tokens) {
+        int i = HitRow(my, 2, 3, static_cast<int>(s.toks.size()));
+        if (i >= 0) {
+            s.tokCursor = i;
+            s.selTok = i;
+            s.certCursor = 0;
+            s.screen = Screen::Certs;
+            s.eatDbl = true;  // не дать двойному клику скопировать сразу
+        }
+        return;
+    }
+    const Tok& t = s.toks[s.selTok];
+    int k = HitRow(my, 2, 3, static_cast<int>(t.certIdx.size()));
+    if (k >= 0) {
+        s.certCursor = k;
+        if (dbl) {  // двойной клик по сертификату - копировать
+            if (t.hardware) s.modal = Modal::Blocked;
+            else { s.modal = Modal::Dest; s.destCursor = 2; s.flagClear = false; }
+        }
+    }
+}
+
 }  // namespace
 
 int RunTui() {
@@ -814,6 +918,7 @@ int RunTui() {
     }
 
     bool running = true;
+    DWORD prevBtns = 0;
     while (running) {
         Render(cv, s);
         con.Present(cv);
@@ -827,6 +932,24 @@ int RunTui() {
         // остаются артефакты от старого кадра.
         if (rec.EventType == WINDOW_BUFFER_SIZE_EVENT) {
             if (con.Resize()) cv = Canvas();
+            continue;
+        }
+        if (rec.EventType == MOUSE_EVENT) {
+            const MOUSE_EVENT_RECORD& m = rec.Event.MouseEvent;
+            if (m.dwEventFlags & MOUSE_WHEELED) {
+                HandleWheel(s, static_cast<short>(HIWORD(m.dwButtonState)) > 0);
+                prevBtns = m.dwButtonState;
+                continue;
+            }
+            bool leftNow = (m.dwButtonState & FROM_LEFT_1ST_BUTTON_PRESSED) != 0;
+            bool leftEdge = leftNow && !(prevBtns & FROM_LEFT_1ST_BUTTON_PRESSED);
+            bool dbl = (m.dwEventFlags & DOUBLE_CLICK) != 0;
+            prevBtns = m.dwButtonState;
+            if (dbl && s.eatDbl) { s.eatDbl = false; continue; }
+            if (leftEdge) s.eatDbl = false;
+            if (leftEdge || dbl)
+                HandleClick(s, m.dwMousePosition.X, m.dwMousePosition.Y, dbl,
+                            running);
             continue;
         }
         if (rec.EventType != KEY_EVENT || !rec.Event.KeyEvent.bKeyDown) continue;

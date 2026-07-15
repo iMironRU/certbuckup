@@ -1,13 +1,25 @@
-# Сборка статического бинаря под Windows 7 SP1 и выше.
+# Сборка статического 32-битного бинаря под Windows 7 SP1 и выше.
 #
 # Требования, из которых вытекают флаги:
 #   - на целевых машинах ничего не устанавливается, поэтому -static:
 #     ни libgcc, ни libstdc++, ни редистрибутива рядом не будет;
 #   - тулчейн обязан быть MSVCRT-сборкой MinGW-w64, а не UCRT:
 #     ucrtbase.dll появилась только в Windows 10, на стоковой Win7 её нет;
-#   - _WIN32_WINNT=0x0601 задаёт нижний порог - Windows 7.
+#   - _WIN32_WINNT=0x0601 задаёт нижний порог - Windows 7;
+#   - i686 (32-бит): 32-битный бинарь запускается и на x86, и на x64 Win7+,
+#     и только он может напрямую грузить 32-битный COM rtComLite.
+#
+# CXX переопределяется под конкретный путь к тулчейну, напр.:
+#   make CXX=/путь/к/i686tc/mingw32/bin/g++
 
-CXX      := g++
+# Windows-only проект: фиксируем cmd как шелл make, иначе рецепты ведут себя
+# по-разному в зависимости от того, есть ли на PATH sh.exe (Git Bash).
+ifeq ($(OS),Windows_NT)
+  SHELL := cmd.exe
+  .SHELLFLAGS := /c
+endif
+
+CXX      ?= i686-w64-mingw32-g++
 CXXFLAGS := -std=c++17 -O2 -Wall -Wextra \
             -D_WIN32_WINNT=0x0601 -DWINVER=0x0601
 LDFLAGS  := -static -static-libgcc -static-libstdc++
@@ -31,13 +43,13 @@ $(BUILDDIR)/%.o: $(SRCDIR)/%.cpp | $(BUILDDIR)
 	$(CXX) $(CXXFLAGS) -c -o $@ $<
 
 $(BUILDDIR):
-	@mkdir -p $(BUILDDIR)
+	if not exist "$(BUILDDIR)" mkdir "$(BUILDDIR)"
 
 # Показывает, от каких DLL зависит бинарь. Ожидаем только системные:
-# kernel32, advapi32, crypt32, msvcrt. Появление ucrtbase или libgcc/libstdc++
-# означает, что на Windows 7 бинарь не запустится.
+# kernel32, advapi32, crypt32, msvcrt, winscard. Появление ucrtbase или
+# libgcc/libstdc++ означает, что на Windows 7 бинарь не запустится.
 check: $(TARGET)
-	objdump -p $(TARGET) | grep "DLL Name"
+	objdump -p $(TARGET) | findstr "DLL"
 
 clean:
-	rm -rf $(BUILDDIR)
+	if exist "$(BUILDDIR)" rmdir /s /q "$(BUILDDIR)"

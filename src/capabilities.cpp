@@ -132,19 +132,23 @@ Environment ProbeEnvironment() {
 
     // 3. rtComLite - сырое копирование файлов контейнера с Рутокена без CSP.
     std::wstring clsid, dll;
-    bool is32 = false;
-    bool rtOk = ResolveComServer(L"rtCOMLite.rtContext", &clsid, &dll, &is32);
+    bool comIs32 = false;
+    bool rtOk = ResolveComServer(L"rtCOMLite.rtContext", &clsid, &dll, &comIs32);
     bool rtDllPresent = rtOk && FileExists(dll);
+    // In-proc COM грузится только в процесс своей разрядности. Сверяем
+    // разрядность компонента с нашей собственной (sizeof(void*)).
+    const bool selfIs32 = (sizeof(void*) == 4);
+    const bool bitnessOk = (comIs32 == selfIs32);
     {
         Capability c;
         c.name = L"rtComLite (COM Рутокен)";
         if (rtOk && rtDllPresent) {
-            // Наш бинарь 64-битный, а компонент обычно 32-битный: для
-            // фактического вызова понадобится 32-битная сборка или суррогат.
-            // Для самого копирования это ограничение, поэтому Partial.
-            c.state = is32 ? CapState::Partial : CapState::Present;
+            c.state = bitnessOk ? CapState::Present : CapState::Partial;
             c.detail = dll;
-            if (is32) c.detail += L"  (32-бит: нужна 32-битная сборка утилиты)";
+            if (!bitnessOk) {
+                c.detail += comIs32 ? L"  (32-бит COM в 64-бит процессе)"
+                                    : L"  (64-бит COM в 32-бит процессе)";
+            }
             c.enables = L"копирование Рутокен-контейнера без КриптоПро";
         } else {
             c.state = CapState::Missing;
@@ -197,9 +201,10 @@ Environment ProbeEnvironment() {
         CopyBackend b;
         b.name = L"rtComLite (сырьё, без CSP)";
         b.scope = L"только Рутокен, файловые контейнеры";
-        if (rtOk && rtDllPresent) {
+        if (rtOk && rtDllPresent && bitnessOk) {
             b.available = true;
-            if (is32) b.reason = L"компонент 32-бит — нужна 32-битная сборка";
+        } else if (rtOk && rtDllPresent) {
+            b.reason = L"разрядность COM не совпадает с процессом";
         } else {
             b.reason = L"нет компонента rtComLite";
         }

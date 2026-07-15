@@ -9,6 +9,7 @@
 #include <string>
 #include <vector>
 
+#include "capabilities.h"
 #include "resolver.h"
 
 namespace {
@@ -56,6 +57,33 @@ std::wstring MediumName(certmig::KeyMedium m) {
     }
 }
 
+std::wstring CapMark(certmig::CapState s) {
+    switch (s) {
+        case certmig::CapState::Present: return L"[+]";
+        case certmig::CapState::Partial: return L"[~]";
+        default: return L"[-]";
+    }
+}
+
+// Отчёт о возможностях окружения и доступных способах копирования (ТЗ 3).
+void PrintEnvironment(const certmig::Environment& env) {
+    OutLine(L"Окружение:");
+    for (const certmig::Capability& c : env.caps) {
+        OutLine(L"  " + CapMark(c.state) + L" " + c.name +
+                (c.detail.empty() ? L"" : L" — " + c.detail));
+        OutLine(L"        " + c.enables);
+        if (c.state != certmig::CapState::Present && !c.hint.empty())
+            OutLine(L"        ↓ " + c.hint);
+    }
+    OutLine();
+    OutLine(L"Способы копирования:");
+    for (const certmig::CopyBackend& b : env.backends) {
+        std::wstring mark = b.available ? L"[+]" : L"[-]";
+        OutLine(L"  " + mark + L" " + b.name + L"  (" + b.scope + L")");
+        if (!b.reason.empty()) OutLine(L"        " + b.reason);
+    }
+}
+
 std::wstring ExportableName(certmig::Exportable e, DWORD err) {
     wchar_t code[32];
     swprintf(code, 32, L" (0x%08lX)", err);
@@ -72,31 +100,32 @@ int main(int argc, char** argv) {
     SetConsoleOutputCP(CP_UTF8);
 
     bool verbose = false;
+    bool envOnly = false;
     for (int i = 1; i < argc; ++i) {
         std::string a = argv[i];
         if (a == "--help" || a == "-h") {
             OutLine(L"CertMigrator - инвентаризация контейнеров КриптоПро");
-            OutLine(L"Использование: cert-migrator [-v]");
-            OutLine(L"  -v   показывать уникальные имена и тип провайдера");
+            OutLine(L"Использование: cert-migrator [-v] [--env]");
+            OutLine(L"  -v      показывать уникальные имена и тип провайдера");
+            OutLine(L"  --env   только проверка окружения, без инвентаризации");
             return 0;
         }
         if (a == "-v" || a == "--verbose") verbose = true;
+        if (a == "--env") envOnly = true;
     }
 
-    // ТЗ 3: проверка окружения. Без CSP дальше идти бессмысленно.
-    certmig::CspInfo csp = certmig::DetectCsp();
-    if (!csp.installed) {
-        OutLine(L"КриптоПро CSP не обнаружен.");
-        OutLine(L"Инструмент работает только поверх установленного CSP.");
+    // ТЗ 3: проба окружения. Показываем, что есть и что из этого можно.
+    certmig::Environment env = certmig::ProbeEnvironment();
+    PrintEnvironment(env);
+    OutLine();
+
+    if (envOnly) return 0;
+
+    // Инвентаризация опирается на CryptoAPI: без CSP её не построить.
+    if (env.caps.empty() || env.caps[0].state != certmig::CapState::Present) {
+        OutLine(L"КриптоПро CSP не обнаружен — инвентаризация недоступна.");
         return 2;
     }
-    std::wstring provs;
-    for (size_t i = 0; i < csp.providers.size(); ++i) {
-        if (i) provs += L", ";
-        provs += csp.providers[i];
-    }
-    OutLine(L"КриптоПро CSP " + csp.version + L"  |  доступно: " + provs);
-    OutLine();
 
     std::vector<certmig::ContainerInfo> items = certmig::EnumerateContainers();
     if (items.empty()) {

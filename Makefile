@@ -11,7 +11,7 @@ CXX      := g++
 CXXFLAGS := -std=c++17 -O2 -Wall -Wextra \
             -D_WIN32_WINNT=0x0601 -DWINVER=0x0601
 LDFLAGS  := -static -static-libgcc -static-libstdc++
-LDLIBS   := -lcrypt32 -ladvapi32
+LDLIBS   := -lcrypt32 -ladvapi32 -lwinscard
 
 SRCDIR   := src
 BUILDDIR := build

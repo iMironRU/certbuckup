@@ -1,0 +1,43 @@
+name: build
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: msys2 {0}
+    steps:
+      - uses: actions/checkout@v4
+
+      # 32-битный тулчейн i686 + MSVCRT (среда MINGW32), как требует Win7.
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW32
+          update: true
+          install: >-
+            mingw-w64-i686-gcc
+            make
+
+      - name: Build
+        run: make CXX=g++ WINDRES=windres
+
+      - name: Проверка зависимостей (только системные DLL)
+        run: |
+          echo "== DLL, от которых зависит бинарь =="
+          objdump -p build/CertBuckUp.exe | grep "DLL Name"
+          # Провал, если затесались ucrtbase / libgcc / libstdc++ (нет на Win7).
+          if objdump -p build/CertBuckUp.exe | grep -Eiq "ucrtbase|libgcc|libstdc"; then
+            echo "ОШИБКА: небезопасная для Windows 7 зависимость"; exit 1
+          fi
+
+      - name: Артефакт
+        uses: actions/upload-artifact@v4
+        with:
+          name: CertBuckUp
+          path: build/CertBuckUp.exe

@@ -12,11 +12,23 @@
 # CXX переопределяется под конкретный путь к тулчейну, напр.:
 #   make CXX=/путь/к/i686tc/mingw32/bin/g++
 
-# Windows-only проект: фиксируем cmd как шелл make, иначе рецепты ведут себя
-# по-разному в зависимости от того, есть ли на PATH sh.exe (Git Bash).
+# Команды создания/удаления папки сборки зависят от среды:
+#   - нативный Windows (cmd): рецепты на cmd, чтобы не зависеть от sh.exe;
+#   - MSYS2/MinGW (CI на GitHub Actions): Unix-шелл;
+#   - прочее (Unix): Unix-шелл.
 ifeq ($(OS),Windows_NT)
-  SHELL := cmd.exe
-  .SHELLFLAGS := /c
+  ifdef MSYSTEM
+    MKDIRP = mkdir -p $(BUILDDIR)
+    RMRF   = rm -rf $(BUILDDIR)
+  else
+    SHELL := cmd.exe
+    .SHELLFLAGS := /c
+    MKDIRP = if not exist "$(BUILDDIR)" mkdir "$(BUILDDIR)"
+    RMRF   = if exist "$(BUILDDIR)" rmdir /s /q "$(BUILDDIR)"
+  endif
+else
+  MKDIRP = mkdir -p $(BUILDDIR)
+  RMRF   = rm -rf $(BUILDDIR)
 endif
 
 CXX      ?= i686-w64-mingw32-g++
@@ -29,7 +41,7 @@ LDLIBS   := -lcrypt32 -ladvapi32 -lwinscard -lole32 -loleaut32 -luuid -lurlmon
 
 SRCDIR   := src
 BUILDDIR := build
-TARGET   := $(BUILDDIR)/cert-migrator.exe
+TARGET   := $(BUILDDIR)/CertBuckUp.exe
 
 SRCS := $(wildcard $(SRCDIR)/*.cpp)
 OBJS := $(patsubst $(SRCDIR)/%.cpp,$(BUILDDIR)/%.o,$(SRCS))
@@ -59,7 +71,7 @@ $(BUILDDIR)/%.o: $(SRCDIR)/%.cpp | $(BUILDDIR)
 -include $(OBJS:.o=.d)
 
 $(BUILDDIR):
-	if not exist "$(BUILDDIR)" mkdir "$(BUILDDIR)"
+	$(MKDIRP)
 
 # Показывает, от каких DLL зависит бинарь. Ожидаем только системные:
 # kernel32, advapi32, crypt32, msvcrt, winscard. Появление ucrtbase или
@@ -68,4 +80,4 @@ check: $(TARGET)
 	objdump -p $(TARGET) | findstr "DLL"
 
 clean:
-	if exist "$(BUILDDIR)" rmdir /s /q "$(BUILDDIR)"
+	$(RMRF)

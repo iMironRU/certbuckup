@@ -601,6 +601,17 @@ struct Console {
     }
 };
 
+// Фоновый скан: инвентаризация выполняется в отдельном потоке, чтобы главный
+// поток мог крутить индикатор "идёт работа". COM (rtComLite) инициализируется
+// внутри ScanToken на том потоке, где вызван, - на рабочем потоке это штатно.
+struct ScanJob {
+    std::vector<ContainerInfo> items;
+};
+DWORD WINAPI ScanThreadProc(LPVOID p) {
+    static_cast<ScanJob*>(p)->items = EnumerateContainers();
+    return 0;
+}
+
 std::wstring NowHHMM() {
     SYSTEMTIME st;
     GetLocalTime(&st);
@@ -669,11 +680,32 @@ int RunTui() {
     // (реестр/файлы), инвентаризация - медленная (rtComLite), поэтому сначала
     // рисуем окружение, потом сканируем.
     Environment env = ProbeEnvironment();
-    RenderEnvironment(cv, env, L"Идёт опрос токенов и чтение контейнеров…");
-    con.Present(cv);
+
+    // Скан в фоне, индикатор в главном потоке.
+    ScanJob job;
+    HANDLE th = CreateThread(nullptr, 0, ScanThreadProc, &job, 0, nullptr);
+    if (th) {
+        const wchar_t spin[] = L"|/-\\";
+        int frame = 0;
+        while (WaitForSingleObject(th, 0) == WAIT_TIMEOUT) {
+            std::wstring status = std::wstring(1, spin[frame % 4]) +
+                                  L" Опрос токенов и чтение контейнеров" +
+                                  std::wstring(frame % 4, L'.');
+            RenderEnvironment(cv, env, status);
+            con.Present(cv);
+            Sleep(90);
+            ++frame;
+        }
+        CloseHandle(th);
+    } else {
+        // Не удалось создать поток - синхронно, без анимации.
+        RenderEnvironment(cv, env, L"Опрос токенов и чтение контейнеров…");
+        con.Present(cv);
+        job.items = EnumerateContainers();
+    }
 
     State s;
-    s.items = EnumerateContainers();
+    s.items = std::move(job.items);
     s.toks = BuildTokens(s.items);
     if (s.toks.empty()) {
         // Показать окружение и подсказку, дать прочитать, выйти по клавише.

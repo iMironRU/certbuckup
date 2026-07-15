@@ -53,6 +53,10 @@ struct ContainerInfo {
     bool hasCert = false;
     DWORD keySpec = 0;         // AT_KEYEXCHANGE или AT_SIGNATURE
 
+    // ID папки контейнера на токене: 3-й сегмент FQCN (напр. 0A00) в hex.
+    // Мостик к rtComLite. -1 - не смарт-карта или не разобрать.
+    int folderId = -1;
+
     // Поля сертификата (ТЗ 2.1)
     std::wstring subjectCN;
     std::wstring subjectO;

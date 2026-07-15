@@ -1,7 +1,10 @@
 #include "resolver.h"
 
 #include <cstdio>
+#include <map>
 #include <set>
+
+#include "rutoken.h"
 
 namespace certmig {
 
@@ -58,6 +61,8 @@ void ParseMedium(const std::wstring& unique, KeyMedium* medium,
         return;
     }
     if (_wcsicmp(head.c_str(), L"SCARD") == 0) {
+        // FileToken здесь предварительно: реальный тип (файловый или
+        // аппаратный) уточняется сканом токена в EnumerateContainers.
         *medium = KeyMedium::FileToken;
         // Следующий сегмент - идентификатор носителя, напр. rutoken_lt_39445e29.
         size_t start = sep + 1;
@@ -72,6 +77,26 @@ void ParseMedium(const std::wstring& unique, KeyMedium* medium,
         return;
     }
     *reader = head;
+}
+
+// Из FQCN достаёт ID папки контейнера на токене. Уникальное имя вида
+//   SCARD\rutoken_lt_39445e29\0A00\28A9
+// несёт в 3-м сегменте (0A00) шестнадцатеричный ID папки: 0x0A00 = 2560.
+// Этот ID совпадает с папкой в файловой системе токена (см. rutoken.cpp).
+int ParseFolderId(const std::wstring& unique) {
+    if (_wcsnicmp(unique.c_str(), L"SCARD\\", 6) != 0) return -1;
+    // Разбиваем по '\' и берём сегмент с индексом 2.
+    size_t p = unique.find(L'\\');              // после SCARD
+    p = (p == std::wstring::npos) ? p : unique.find(L'\\', p + 1);  // после носителя
+    if (p == std::wstring::npos) return -1;
+    size_t start = p + 1;
+    size_t end = unique.find(L'\\', start);
+    std::wstring seg = (end == std::wstring::npos) ? unique.substr(start)
+                                                   : unique.substr(start, end - start);
+    if (seg.empty()) return -1;
+    wchar_t* endp = nullptr;
+    long id = wcstol(seg.c_str(), &endp, 16);
+    return (endp && *endp == 0 && id > 0) ? static_cast<int>(id) : -1;
 }
 
 std::wstring ToHex(const BYTE* data, DWORD len) {
@@ -214,6 +239,7 @@ bool ResolveOne(const ProviderType& pt, const std::wstring& contName,
 
     info->uniqueName = GetProvParamString(prov, PP_UNIQUE_CONTAINER);
     ParseMedium(info->uniqueName, &info->medium, &info->reader);
+    info->folderId = ParseFolderId(info->uniqueName);
 
     if (!ReadCertFromContainer(prov, info)) {
         // Контейнер без сертификата внутри. По ТЗ 8.3 это "orphan":
@@ -256,6 +282,39 @@ CspInfo DetectCsp() {
         CryptReleaseContext(prov, 0);
     }
     return info;
+}
+
+// Уточняет тип носителя реальным сканом токенов (ТЗ 7.2, 1). До этого все
+// SCARD-контейнеры помечены FileToken предварительно. Скан показывает, у каких
+// на токене есть настоящая 6-файловая структура: есть - файловый (копируется),
+// нет - ключ внутри чипа, аппаратный (копировать нечего).
+//
+// Имя ридера rtComLite (Aktiv Rutoken lite 0) не совпадает с коротким id из
+// FQCN (rutoken_lt_39445e29), поэтому не пытаемся сопоставлять их по имени, а
+// сканируем все токены и объединяем их папки-контейнеры. ID папки (folderId)
+// уникально указывает на файловый контейнер: если он есть в объединении -
+// контейнер файловый; если нет - помечаем аппаратным. Консервативно: при
+// сомнении лучше исключить из копирования, чем копировать вслепую.
+void RefineMediumByScan(std::vector<ContainerInfo>* items) {
+    std::vector<std::wstring> readers = EnumReaders();
+    if (readers.empty()) return;  // rtComLite недоступен - оставляем как есть
+
+    std::set<int> fileFolders;
+    bool anyOk = false;
+    for (const std::wstring& r : readers) {
+        TokenScan s = ScanToken(r);
+        if (!s.ok) continue;
+        anyOk = true;
+        fileFolders.insert(s.containerFolders.begin(), s.containerFolders.end());
+    }
+    if (!anyOk) return;  // ни один токен не отсканировался - не трогаем
+
+    for (ContainerInfo& c : *items) {
+        if (c.medium != KeyMedium::FileToken) continue;  // реестр не трогаем
+        c.medium = (c.folderId >= 0 && fileFolders.count(c.folderId))
+                       ? KeyMedium::FileToken
+                       : KeyMedium::HardWare;
+    }
 }
 
 std::vector<ContainerInfo> EnumerateContainers() {
@@ -307,6 +366,8 @@ std::vector<ContainerInfo> EnumerateContainers() {
 
         CryptReleaseContext(prov, 0);
     }
+
+    RefineMediumByScan(&out);
     return out;
 }
 

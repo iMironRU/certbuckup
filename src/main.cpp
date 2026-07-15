@@ -11,6 +11,7 @@
 
 #include "capabilities.h"
 #include "resolver.h"
+#include "rutoken.h"
 
 namespace {
 
@@ -50,9 +51,10 @@ std::wstring KeySpecName(DWORD spec) {
 
 std::wstring MediumName(certmig::KeyMedium m) {
     switch (m) {
-        case certmig::KeyMedium::Registry: return L"реестр";
-        case certmig::KeyMedium::FileToken: return L"файловый";
-        case certmig::KeyMedium::HardWare: return L"аппаратный";
+        case certmig::KeyMedium::Registry: return L"реестр (копируется)";
+        case certmig::KeyMedium::FileToken: return L"файловый (копируется)";
+        case certmig::KeyMedium::HardWare:
+            return L"аппаратный — ключ в чипе, НЕ копируется";
         default: return L"?";
     }
 }
@@ -112,6 +114,24 @@ int main(int argc, char** argv) {
         }
         if (a == "-v" || a == "--verbose") verbose = true;
         if (a == "--env") envOnly = true;
+        if (a == "--scan") {
+            // Диагностика rtComLite: какие токены видны и какие папки на них
+            // распознаны как файловые контейнеры.
+            std::vector<std::wstring> readers = certmig::EnumReaders();
+            OutLine(L"rtComLite видит ридеров: " +
+                    std::to_wstring(readers.size()));
+            for (const std::wstring& r : readers) {
+                certmig::TokenScan s = certmig::ScanToken(r);
+                OutLine(L"  " + r + (s.ok ? L"  [ok]" : L"  [ошибка: " + s.error + L"]"));
+                for (int f : s.containerFolders) {
+                    wchar_t hex[16];
+                    swprintf(hex, 16, L"0x%04X", f);
+                    OutLine(L"      контейнер-папка " + std::to_wstring(f) +
+                            L" (" + hex + L")");
+                }
+            }
+            return 0;
+        }
     }
 
     // ТЗ 3: проба окружения. Показываем, что есть и что из этого можно.

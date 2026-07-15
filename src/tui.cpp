@@ -239,7 +239,14 @@ void RenderCerts(Canvas& cv, const State& s) {
         cv.Fill(2, y, W - 4, 2, a);
         std::wstring icon = copyable ? L"▤ " : L"⚿ ";
         cv.Text(4, y, icon + OwnerOf(c), sel ? A_SEL : A_ACC, W - 30);
-        std::wstring meta = c.subjectO + L" · до " + FormatDate(c.notAfter) +
+        // ИНН первым: владелец у контейнеров одной организации совпадает,
+        // различает их именно ИНН (ТЗ 2.1). Берём ИНН юрлица - он меняется
+        // между организациями; ИНН физлица у одного человека одинаков и не
+        // помогает. Для КЭП без юрлица - физлица.
+        std::wstring inn = !c.innLe.empty() ? c.innLe
+                           : !c.inn.empty() ? c.inn
+                                            : L"—";
+        std::wstring meta = L"ИНН " + inn + L" · до " + FormatDate(c.notAfter) +
                             L" · " + (c.thumbprint.size() >= 8
                                           ? c.thumbprint.substr(0, 8)
                                           : c.thumbprint);

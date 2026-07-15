@@ -20,7 +20,9 @@ ifeq ($(OS),Windows_NT)
 endif
 
 CXX      ?= i686-w64-mingw32-g++
-CXXFLAGS := -std=c++17 -O2 -Wall -Wextra \
+# -MMD -MP: генерировать .d-файлы зависимостей от заголовков, чтобы правка
+# .h вызывала пересборку зависящих .o (иначе ловятся рассинхроны сигнатур).
+CXXFLAGS := -std=c++17 -O2 -Wall -Wextra -MMD -MP \
             -D_WIN32_WINNT=0x0601 -DWINVER=0x0601
 LDFLAGS  := -static -static-libgcc -static-libstdc++
 LDLIBS   := -lcrypt32 -ladvapi32 -lwinscard -lole32 -loleaut32 -luuid
@@ -41,6 +43,9 @@ $(TARGET): $(OBJS)
 
 $(BUILDDIR)/%.o: $(SRCDIR)/%.cpp | $(BUILDDIR)
 	$(CXX) $(CXXFLAGS) -c -o $@ $<
+
+# Подхватываем сгенерированные зависимости от заголовков.
+-include $(OBJS:.o=.d)
 
 $(BUILDDIR):
 	if not exist "$(BUILDDIR)" mkdir "$(BUILDDIR)"

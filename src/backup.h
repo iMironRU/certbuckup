@@ -14,6 +14,7 @@ namespace certmig {
 
 struct BackupResult {
     bool ok = false;
+    bool skipped = false;     // папка уже существует, копирование не делали
     std::wstring dest;        // куда записано (папка 8.3-контейнера)
     std::wstring name83;      // имя контейнера 8.3
     std::wstring human;       // человекочитаемая обёртка ИНН.ММГГ
@@ -22,11 +23,19 @@ struct BackupResult {
     std::vector<ContainerFile> files;  // что скопировано (имя+размер)
 };
 
+// Куда ляжет копия контейнера: targetBase\ИНН.ММГГ\8.3. Позволяет заранее
+// проверить, не занята ли папка, до чтения токена.
+std::wstring BackupTargetPath(const ContainerInfo& c,
+                              const std::wstring& targetBase);
+
 // Копирует файловый контейнер c в targetBase\ИНН.ММГГ\8.3\. Читает 6 файлов
 // с токена через rtComLite, пишет их, дополняет index.csv и журнал.
-// Аппаратные и не-файловые контейнеры отклоняются.
+// Аппаратные и не-файловые контейнеры отклоняются. Если папка уже есть и
+// overwrite == false - возвращает skipped без записи; при overwrite == true
+// перезаписывает.
 BackupResult BackupToFolder(const ContainerInfo& c,
-                            const std::wstring& targetBase);
+                            const std::wstring& targetBase,
+                            bool overwrite = false);
 
 // Путь к папке cert рядом с exe - цель по умолчанию.
 std::wstring DefaultBackupDir();

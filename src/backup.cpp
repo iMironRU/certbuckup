@@ -104,12 +104,38 @@ std::wstring FindReaderForFolder(int folderId) {
     return L"";
 }
 
+// Удаляет папку с содержимым (для перезаписи существующей копии). Рекурсивно,
+// но на практике внутри только .key-файлы.
+void RemoveDirRecursive(const std::wstring& dir) {
+    WIN32_FIND_DATAW fd;
+    HANDLE h = FindFirstFileW((dir + L"\\*").c_str(), &fd);
+    if (h != INVALID_HANDLE_VALUE) {
+        do {
+            std::wstring name = fd.cFileName;
+            if (name == L"." || name == L"..") continue;
+            std::wstring full = dir + L"\\" + name;
+            if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)
+                RemoveDirRecursive(full);
+            else
+                DeleteFileW(full.c_str());
+        } while (FindNextFileW(h, &fd));
+        FindClose(h);
+    }
+    RemoveDirectoryW(dir.c_str());
+}
+
 }  // namespace
 
 std::wstring DefaultBackupDir() { return ExeDir() + L"\\cert"; }
 
+std::wstring BackupTargetPath(const ContainerInfo& c,
+                              const std::wstring& targetBase) {
+    return targetBase + L"\\" + FolderInn(c) + L"." + MMYY(c.notAfter) + L"\\" +
+           Name83(c);
+}
+
 BackupResult BackupToFolder(const ContainerInfo& c,
-                            const std::wstring& targetBase) {
+                            const std::wstring& targetBase, bool overwrite) {
     BackupResult r;
     std::wstring subj = c.subjectCN + L" / " + c.Inn();
 
@@ -151,10 +177,14 @@ BackupResult BackupToFolder(const ContainerInfo& c,
         return r;
     }
     if (GetFileAttributesW(r.dest.c_str()) != INVALID_FILE_ATTRIBUTES) {
-        r.message = L"Контейнер уже сохранён (не перезаписываю): " + r.dest;
-        JournalOp(L"backup", subj, c.thumbprint, r.reader, r.dest,
-                  L"отказ: папка существует");
-        return r;
+        if (!overwrite) {
+            r.skipped = true;
+            r.message = L"Копия уже существует: " + r.dest;
+            JournalOp(L"backup", subj, c.thumbprint, r.reader, r.dest,
+                      L"пропуск: папка существует");
+            return r;
+        }
+        RemoveDirRecursive(r.dest);  // перезапись по подтверждению оператора
     }
     if (!EnsureDir(r.dest)) {
         r.message = L"Не удалось создать папку контейнера: " + r.dest;

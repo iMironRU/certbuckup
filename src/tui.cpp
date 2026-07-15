@@ -166,7 +166,7 @@ std::wstring OwnerOf(const ContainerInfo& c) {
 
 // --- Состояние --------------------------------------------------------------
 enum class Screen { Tokens, Certs };
-enum class Modal { None, Dest, Blocked, Info, Exit, Result };
+enum class Modal { None, Dest, Blocked, Info, Exit, Result, Overwrite };
 
 struct DestOpt {
     std::wstring label;
@@ -186,11 +186,13 @@ struct State {
     Screen screen = Screen::Tokens;
     Modal modal = Modal::None;
 
-    int tokCursor = 0, certCursor = 0, destCursor = 0, exitCursor = 0;
+    // Курсор назначения по умолчанию - "Папка рядом с приложением" (индекс 2).
+    int tokCursor = 0, certCursor = 0, destCursor = 2, exitCursor = 0;
+    int overwriteCursor = 0;  // 0 = перезаписать, 1 = отмена
     int selTok = 0;
     bool flagClear = false;   // чекбокс "снять признак неэкспортируемости"
     std::wstring resultMsg;
-    bool resultOk = false;
+    int resultKind = 0;       // 0 ok, 1 пропуск, 2 ошибка
     std::vector<LogRow> log;
 
     std::vector<DestOpt> dests = {
@@ -290,25 +292,26 @@ void DrawDialog(Canvas& cv, int x, int y, int w, int h,
 
 void RenderDest(Canvas& cv, const State& s) {
     const ContainerInfo& c = s.items[s.toks[s.selTok].certIdx[s.certCursor]];
-    int w = 66, h = 16, x = (W - w) / 2, y = (H - h) / 2;
+    // Широкий диалог, чтобы путь помещался целиком; каждый вариант - две
+    // строки (название + полный путь), путь не обрезается.
+    int w = W - 8 > 96 ? 96 : W - 8;
+    int h = 20, x = (W - w) / 2, y = (H - h) / 2;
     DrawDialog(cv, x, y, w, h, L"Куда скопировать контейнер");
     cv.Text(x + 3, y + 2, OwnerOf(c), A_SURFACC, w - 6);
+
     int ry = y + 4;
     for (int i = 0; i < static_cast<int>(s.dests.size()); ++i) {
         const DestOpt& d = s.dests[i];
         bool sel = (i == s.destCursor);
-        WORD a = sel ? A_SEL : A_SURF;
-        cv.Fill(x + 2, ry, w - 4, 1, a);
+        cv.Fill(x + 2, ry, w - 4, 2, A_SURF);
         std::wstring radio = sel ? L"(●) " : L"( ) ";
         std::wstring line = radio + d.label;
         if (!d.implemented) line += L"  (в разработке)";
-        cv.Text(x + 4, ry, line, a, w - 8);
-        if (!d.path.empty())
-            cv.Text(x + 4, ry, radio + Pad(d.label, 34) + d.path,
-                    sel ? A_SEL : A_SURFDIM, w - 8);
-        ry += 1;
+        cv.Text(x + 4, ry, line, sel ? A_SURFACC : A_SURF, w - 8);
+        std::wstring path = d.implemented ? d.path : L"—";
+        cv.Text(x + 8, ry + 1, path, sel ? A_SURF : A_SURFDIM, w - 12);
+        ry += 2;
     }
-    // Чекбокс снятия признака (показываем, если ключ неэкспортируемый).
     ry += 1;
     if (c.exportable == Exportable::No) {
         std::wstring cb = s.flagClear ? L"[✓] " : L"[ ] ";
@@ -317,6 +320,19 @@ void RenderDest(Canvas& cv, const State& s) {
     }
     cv.Text(x + 3, y + h - 2, L"↑↓ выбор · Enter копировать · Esc отмена",
             A_SURFDIM, w - 6);
+}
+
+void RenderOverwrite(Canvas& cv, const State& s) {
+    int w = 60, h = 9, x = (W - w) / 2, y = (H - h) / 2;
+    DrawDialog(cv, x, y, w, h, L"Папка уже существует");
+    cv.Text(x + 3, y + 2, L"Копия этого контейнера уже есть в этой папке.",
+            A_SURF, w - 6);
+    const wchar_t* opts[2] = {L"Перезаписать", L"Отмена"};
+    for (int i = 0; i < 2; ++i) {
+        bool sel = (i == s.overwriteCursor);
+        cv.Text(x + 6, y + 4 + i, (sel ? L"► " : L"  ") + std::wstring(opts[i]),
+                sel ? A_SURFACC : A_SURF);
+    }
 }
 
 void RenderBlocked(Canvas& cv, const State& s) {
@@ -367,9 +383,9 @@ void RenderInfo(Canvas& cv, const State& s) {
 void RenderResult(Canvas& cv, const State& s) {
     cv.Clear(A_BG);
     DrawWindow(cv, L"Результат операции", L"");
-    std::wstring mark = s.resultOk ? L"✓ " : L"✗ ";
+    std::wstring mark = s.resultKind == 0 ? L"✓ " : s.resultKind == 1 ? L"• " : L"✗ ";
     cv.Fill(2, 2, W - 4, 2, Attr(C_TEXT, C_NEUTRAL));
-    cv.Text(4, 2, mark + s.resultMsg, s.resultOk ? A_ACC : A_DIM, W - 8);
+    cv.Text(4, 2, mark + s.resultMsg, s.resultKind == 0 ? A_ACC : A_DIM, W - 8);
 
     cv.Text(4, 5, L"Журнал операций за сеанс:", A_DIM);
     cv.Text(4, 6, Pad(L"Время", 10) + Pad(L"Токен", 20) + Pad(L"Владелец", 30) +
@@ -438,6 +454,7 @@ void Render(Canvas& cv, const State& s) {
     else RenderCerts(cv, s);
     switch (s.modal) {
         case Modal::Dest: RenderDest(cv, s); break;
+        case Modal::Overwrite: RenderDest(cv, s); RenderOverwrite(cv, s); break;
         case Modal::Blocked: RenderBlocked(cv, s); break;
         case Modal::Info: RenderInfo(cv, s); break;
         case Modal::Exit: RenderExit(cv, s); break;
@@ -557,6 +574,20 @@ struct Console {
         else PresentLegacy(cv);
     }
 
+    // Перечитать размер окна (после ресайза). Возвращает true, если изменился.
+    bool Resize() {
+        CONSOLE_SCREEN_BUFFER_INFO bi;
+        if (!GetConsoleScreenBufferInfo(out, &bi)) return false;
+        int cols = bi.srWindow.Right - bi.srWindow.Left + 1;
+        int rows = bi.srWindow.Bottom - bi.srWindow.Top + 1;
+        int nw = cols < 40 ? 40 : (cols > 200 ? 200 : cols);
+        int nh = rows < 12 ? 12 : (rows > 60 ? 60 : rows);
+        if (nw == W && nh == H) return false;
+        W = nw;
+        H = nh;
+        return true;
+    }
+
     void Restore() {
         if (!ok) return;
         if (vt) {
@@ -579,7 +610,7 @@ std::wstring NowHHMM() {
 }
 
 // Выполнить копирование выбранного контейнера в выбранное назначение.
-void DoCopy(State& s) {
+void DoCopy(State& s, bool overwrite) {
     const Tok& t = s.toks[s.selTok];
     const ContainerInfo& c = s.items[t.certIdx[s.certCursor]];
     const DestOpt& d = s.dests[s.destCursor];
@@ -591,21 +622,37 @@ void DoCopy(State& s) {
     row.dest = d.label;
 
     if (!d.implemented) {
-        s.resultOk = false;
+        s.resultKind = 2;
         s.resultMsg = L"Назначение «" + d.label + L"» ещё в разработке.";
         row.ok = false;
         row.status = L"в разработке";
     } else {
-        BackupResult br = BackupToFolder(c, d.path);
-        s.resultOk = br.ok;
+        BackupResult br = BackupToFolder(c, d.path, overwrite);
+        s.resultKind = br.ok ? 0 : br.skipped ? 1 : 2;
         s.resultMsg = br.message;
         row.ok = br.ok;
-        row.status = br.ok ? L"Успешно" : L"Ошибка";
+        row.status = br.ok ? L"Успешно" : br.skipped ? L"Пропущено" : L"Ошибка";
         if (br.ok && s.flagClear)
             s.resultMsg += L"  (снятие признака — следующий этап)";
     }
     s.log.push_back(row);
     s.modal = Modal::Result;
+}
+
+// Проверить, не занята ли папка назначения; при занятости - спросить о
+// перезаписи, иначе сразу копировать.
+void RequestCopy(State& s) {
+    const ContainerInfo& c = s.items[s.toks[s.selTok].certIdx[s.certCursor]];
+    const DestOpt& d = s.dests[s.destCursor];
+    if (d.implemented) {
+        std::wstring dest = BackupTargetPath(c, d.path);
+        if (GetFileAttributesW(dest.c_str()) != INVALID_FILE_ATTRIBUTES) {
+            s.overwriteCursor = 1;  // по умолчанию - отмена (безопаснее)
+            s.modal = Modal::Overwrite;
+            return;
+        }
+    }
+    DoCopy(s, false);
 }
 
 }  // namespace
@@ -652,6 +699,12 @@ int RunTui() {
         // Ошибка чтения (нет консоли) - выходим, а не крутим busy-loop.
         if (!ReadConsoleInputW(con.in, &rec, 1, &read)) break;
         if (read == 0) continue;
+        // Ресайз окна: пересоздать холст под новый размер, иначе по краям
+        // остаются артефакты от старого кадра.
+        if (rec.EventType == WINDOW_BUFFER_SIZE_EVENT) {
+            if (con.Resize()) cv = Canvas();
+            continue;
+        }
         if (rec.EventType != KEY_EVENT || !rec.Event.KeyEvent.bKeyDown) continue;
         WORD vk = rec.Event.KeyEvent.wVirtualKeyCode;
 
@@ -689,7 +742,18 @@ int RunTui() {
             else if (vk == VK_SPACE && c.exportable == Exportable::No)
                 s.flagClear = !s.flagClear;
             else if (vk == VK_ESCAPE) s.modal = Modal::None;
-            else if (vk == VK_RETURN) DoCopy(s);
+            else if (vk == VK_RETURN) RequestCopy(s);
+            continue;
+        }
+        if (s.modal == Modal::Overwrite) {
+            if (vk == VK_UP || vk == VK_DOWN)
+                s.overwriteCursor = 1 - s.overwriteCursor;
+            else if (vk == VK_ESCAPE)
+                s.modal = Modal::Dest;
+            else if (vk == VK_RETURN) {
+                if (s.overwriteCursor == 0) DoCopy(s, true);
+                else s.modal = Modal::Dest;
+            }
             continue;
         }
 
@@ -715,7 +779,7 @@ int RunTui() {
             else if (vk == VK_DOWN) s.certCursor = (s.certCursor + 1) % n;
             else if (vk == VK_F5) {
                 if (t.hardware) s.modal = Modal::Blocked;
-                else { s.modal = Modal::Dest; s.destCursor = 0; s.flagClear = false; }
+                else { s.modal = Modal::Dest; s.destCursor = 2; s.flagClear = false; }
             }
         }
     }

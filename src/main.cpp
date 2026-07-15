@@ -56,6 +56,16 @@ std::wstring MediumName(certmig::KeyMedium m) {
     }
 }
 
+std::wstring ExportableName(certmig::Exportable e, DWORD err) {
+    wchar_t code[32];
+    swprintf(code, 32, L" (0x%08lX)", err);
+    switch (e) {
+        case certmig::Exportable::Yes: return L"да";
+        case certmig::Exportable::No:  return L"НЕТ" + std::wstring(code);
+        default: return L"не определено" + std::wstring(code);
+    }
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -95,22 +105,22 @@ int main(int argc, char** argv) {
         return 0;
     }
 
-    const size_t kCN = 30, kO = 22, kDate = 14, kDays = 12, kReader = 24,
-                 kKey = 9, kMed = 11;
+    const size_t kInn = 15, kCN = 34, kFrom = 13, kTo = 13, kDays = 11,
+                 kReader = 22;
 
-    OutLine(Pad(L"Владелец (CN)", kCN) + Pad(L"Организация (O)", kO) +
-            Pad(L"Действует до", kDate) + Pad(L"Осталось", kDays) +
-            Pad(L"Носитель", kReader) + Pad(L"Ключ", kKey) +
-            Pad(L"Тип", kMed));
-    OutLine(std::wstring(kCN + kO + kDate + kDays + kReader + kKey + kMed, L'-'));
+    OutLine(Pad(L"ИНН", kInn) + Pad(L"Владелец", kCN) + Pad(L"Действует с", kFrom) +
+            Pad(L"по", kTo) + Pad(L"Осталось", kDays) + Pad(L"Носитель", kReader));
+    OutLine(std::wstring(kInn + kCN + kFrom + kTo + kDays + kReader, L'-'));
 
     int expiring = 0, orphans = 0;
 
     for (const certmig::ContainerInfo& c : items) {
-        std::wstring cn = c.subjectCN, org = c.subjectO, date = L"-",
-                     days = L"-";
+        std::wstring cn = c.subjectCN, from = L"-", date = L"-", days = L"-";
+        std::wstring inn = c.Inn();
+        if (inn.empty()) inn = L"—";
 
         if (c.hasCert) {
+            from = certmig::FormatDate(c.notBefore);
             date = certmig::FormatDate(c.notAfter);
             int d = certmig::DaysUntil(c.notAfter);
             // Подсветка истекающих (ТЗ 2.1). Порог 30 дней.
@@ -128,17 +138,27 @@ int main(int argc, char** argv) {
             ++orphans;
         }
 
-        OutLine(Pad(cn, kCN) + Pad(org, kO) + Pad(date, kDate) +
-                Pad(days, kDays) + Pad(c.reader, kReader) +
-                Pad(KeySpecName(c.keySpec), kKey) + Pad(MediumName(c.medium), kMed));
+        OutLine(Pad(inn, kInn) + Pad(cn, kCN) + Pad(from, kFrom) +
+                Pad(date, kTo) + Pad(days, kDays) + Pad(c.reader, kReader));
 
-        OutLine(L"    контейнер:  " + c.name);
-        if (!c.thumbprint.empty()) OutLine(L"    thumbprint: " + c.thumbprint);
+        if (!c.subjectO.empty() && c.subjectO != c.subjectCN)
+            OutLine(L"    организация: " + c.subjectO);
+        if (!c.surname.empty() || !c.given.empty())
+            OutLine(L"    ФИО:         " + c.surname + L" " + c.given);
+        if (!c.snils.empty()) OutLine(L"    СНИЛС:       " + c.snils);
+        OutLine(L"    носитель:    " + MediumName(c.medium) + L", ключ: " +
+                KeySpecName(c.keySpec));
+        OutLine(L"    экспорт:     " + ExportableName(c.exportable, c.exportError));
+        OutLine(L"    контейнер:   " + c.name);
+        if (!c.thumbprint.empty()) OutLine(L"    thumbprint:  " + c.thumbprint);
         if (verbose) {
-            if (!c.uniqueName.empty()) OutLine(L"    unique:     " + c.uniqueName);
-            OutLine(L"    провайдер:  " + c.provName + L" (тип " +
+            if (!c.uniqueName.empty()) OutLine(L"    unique:      " + c.uniqueName);
+            if (!c.ogrn.empty()) OutLine(L"    ОГРН:        " + c.ogrn);
+            if (!c.inn.empty()) OutLine(L"    ИНН физлица: " + c.inn);
+            if (!c.innLe.empty()) OutLine(L"    ИНН юрлица:  " + c.innLe);
+            OutLine(L"    провайдер:   " + c.provName + L" (тип " +
                     std::to_wstring(c.provType) + L")");
-            if (!c.serial.empty()) OutLine(L"    serial:     " + c.serial);
+            if (!c.serial.empty()) OutLine(L"    serial:      " + c.serial);
         }
         if (!c.error.empty()) OutLine(L"    ! " + c.error);
         OutLine();

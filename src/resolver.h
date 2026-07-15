@@ -35,6 +35,14 @@ enum class KeyMedium {
     HardWare,   // ключ сгенерирован внутри чипа - копирование невозможно
 };
 
+// Экспортируемость приватного ключа (ТЗ 2.1). Меряется попыткой
+// CryptExportKey, а не гадается по имени носителя.
+enum class Exportable {
+    Unknown,
+    Yes,
+    No,
+};
+
 struct ContainerInfo {
     std::wstring name;         // имя контейнера, как отдаёт PP_ENUMCONTAINERS
     std::wstring uniqueName;   // PP_UNIQUE_CONTAINER
@@ -50,9 +58,26 @@ struct ContainerInfo {
     std::wstring subjectO;
     std::wstring thumbprint;   // SHA1
     std::wstring serial;
+    FILETIME notBefore{};
     FILETIME notAfter{};
 
+    // Российские атрибуты. В стандартном X.509 их нет, УЦ кладёт их
+    // отдельными OID'ами в Subject.
+    std::wstring inn;     // ИНН физлица (1.2.643.3.131.1.1)
+    std::wstring innLe;   // ИНН юрлица  (1.2.643.100.4)
+    std::wstring ogrn;    // ОГРН        (1.2.643.100.1)
+    std::wstring snils;   // СНИЛС       (1.2.643.100.3)
+    std::wstring surname; // фамилия     (2.5.4.4)
+    std::wstring given;   // имя-отчество (2.5.4.42)
+
+    // ИНН, который стоит показывать: физлица, иначе юрлица.
+    const std::wstring& Inn() const { return inn.empty() ? innLe : inn; }
+
     KeyMedium medium = KeyMedium::Unknown;
+    Exportable exportable = Exportable::Unknown;
+    // Код ошибки CryptExportKey, если экспорт не удался. Нужен, чтобы
+    // отличить "ключ неэкспортируемый" от "не спросили PIN".
+    DWORD exportError = 0;
 
     // Пустая строка - ошибок не было. Иначе причина, по которой сертификат
     // не удалось разрешить; строка контейнера всё равно попадает в вывод,

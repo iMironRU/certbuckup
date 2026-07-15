@@ -14,6 +14,13 @@ const size_t kProviderCount = sizeof(kProviders) / sizeof(kProviders[0]);
 
 namespace {
 
+// OID'ы российских атрибутов Subject. В wincrypt.h их нет: это не часть
+// X.509, а расширения, которые кладёт УЦ.
+const char kOidInn[]   = "1.2.643.3.131.1.1";  // ИНН физлица
+const char kOidInnLe[] = "1.2.643.100.4";      // ИНН юрлица
+const char kOidOgrn[]  = "1.2.643.100.1";      // ОГРН
+const char kOidSnils[] = "1.2.643.100.3";      // СНИЛС
+
 std::wstring AnsiToWide(const char* s) {
     if (!s || !*s) return L"";
     int need = MultiByteToWideChar(CP_ACP, 0, s, -1, nullptr, 0);
@@ -122,7 +129,15 @@ bool ReadCertFromContainer(HCRYPTPROV prov, ContainerInfo* info) {
         info->keySpec = spec;
         info->subjectCN = GetNameAttr(ctx, szOID_COMMON_NAME);
         info->subjectO = GetNameAttr(ctx, szOID_ORGANIZATION_NAME);
+        info->notBefore = ctx->pCertInfo->NotBefore;
         info->notAfter = ctx->pCertInfo->NotAfter;
+
+        info->inn = GetNameAttr(ctx, kOidInn);
+        info->innLe = GetNameAttr(ctx, kOidInnLe);
+        info->ogrn = GetNameAttr(ctx, kOidOgrn);
+        info->snils = GetNameAttr(ctx, kOidSnils);
+        info->surname = GetNameAttr(ctx, szOID_SUR_NAME);
+        info->given = GetNameAttr(ctx, szOID_GIVEN_NAME);
 
         BYTE hash[20];
         DWORD cbHash = sizeof(hash);
@@ -145,6 +160,36 @@ bool ReadCertFromContainer(HCRYPTPROV prov, ContainerInfo* info) {
         return true;
     }
     return false;
+}
+
+// Меряет экспортируемость: пробует узнать размер PRIVATEKEYBLOB.
+// Ключ при этом не выгружается - запрашивается только длина, буфер нулевой.
+//
+// Это единственный честный способ: по имени носителя экспортируемость не
+// определить, а именно она решает, можно ли скопировать контейнер штатным
+// CryptoAPI (CryptExportKey -> CryptImportKey) или нужен keycopy.
+void ProbeExportable(HCRYPTPROV prov, DWORD keySpec, ContainerInfo* info) {
+    HCRYPTKEY key = 0;
+    if (!CryptGetUserKey(prov, keySpec, &key)) {
+        info->exportError = GetLastError();
+        return;
+    }
+
+    DWORD cb = 0;
+    if (CryptExportKey(key, 0, PRIVATEKEYBLOB, 0, nullptr, &cb)) {
+        info->exportable = Exportable::Yes;
+    } else {
+        // NTE_BAD_KEY_STATE (0x8009000B) и NTE_PERM (0x80090010) означают
+        // именно запрет экспорта. Прочие коды - что-то другое, и объявлять
+        // ключ неэкспортируемым по ним нельзя.
+        DWORD err = GetLastError();
+        info->exportError = err;
+        if (err == static_cast<DWORD>(NTE_BAD_KEY_STATE) ||
+            err == static_cast<DWORD>(NTE_PERM)) {
+            info->exportable = Exportable::No;
+        }
+    }
+    CryptDestroyKey(key);
 }
 
 std::wstring GetProvParamString(HCRYPTPROV prov, DWORD param) {
@@ -176,6 +221,8 @@ bool ResolveOne(const ProviderType& pt, const std::wstring& contName,
         // что носитель вообще есть.
         info->error = L"сертификат не найден в контейнере";
     }
+
+    if (info->keySpec) ProbeExportable(prov, info->keySpec, info);
 
     CryptReleaseContext(prov, 0);
     return true;

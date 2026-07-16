@@ -33,16 +33,20 @@ std::wstring BackupTargetPath(const ContainerInfo& c,
 // Аппаратные и не-файловые контейнеры отклоняются. Если папка уже есть и
 // overwrite == false - возвращает skipped без записи; при overwrite == true
 // перезаписывает.
+// renameReadable: заменить GUID-образное имя контейнера (name.key) на
+// человекочитаемое (организация + ИНН + срок).
 BackupResult BackupToFolder(const ContainerInfo& c,
                             const std::wstring& targetBase,
                             bool overwrite = false,
-                            bool clearExportFlag = false);
+                            bool clearExportFlag = false,
+                            bool renameReadable = true);
 
 // Копирует контейнер в реестр Windows (хранилище контейнеров КриптоПро):
 // 6 файлов как бинарные значения под ключом Crypto Pro Settings USERS
 // <SID> Keys <8.3-имя>. Требует прав администратора (запись в HKLM).
 BackupResult BackupToRegistry(const ContainerInfo& c, bool overwrite = false,
-                              bool clearExportFlag = false);
+                              bool clearExportFlag = false,
+                              bool renameReadable = true);
 
 // Есть ли уже такой контейнер в реестре (для предупреждения о перезаписи).
 bool RegistryContainerExists(const ContainerInfo& c);
@@ -52,7 +56,8 @@ bool RegistryContainerExists(const ContainerInfo& c);
 // CryptoPro читает такой контейнер как локальный дисковый.
 BackupResult BackupToCryptoProStore(const ContainerInfo& c,
                                     bool overwrite = false,
-                                    bool clearExportFlag = false);
+                                    bool clearExportFlag = false,
+                                    bool renameReadable = true);
 std::wstring CryptoProStoreDir();          // %LOCALAPPDATA%\Crypto Pro
 bool CryptoProStoreExists(const ContainerInfo& c);
 

@@ -111,6 +111,54 @@ bool ClearExportFlagInFiles(std::vector<ContainerFile>* files) {
     return false;
 }
 
+// Человекочитаемое имя контейнера из данных сертификата: организация, ИНН,
+// срок. Вместо GUID-образной строки, которую показывает CryptoPro.
+std::wstring AutoFriendlyName(const ContainerInfo& c) {
+    std::wstring org = !c.subjectO.empty() ? c.subjectO : c.subjectCN;
+    std::wstring inn = !c.innLe.empty() ? c.innLe : c.inn;
+    std::wstring name = org;
+    if (!inn.empty()) name += L" " + inn;
+    // Срок: до ММ.ГГГГ.
+    FILETIME local;
+    SYSTEMTIME st;
+    if (FileTimeToLocalFileTime(&c.notAfter, &local) &&
+        FileTimeToSystemTime(&local, &st)) {
+        wchar_t buf[16];
+        swprintf(buf, 16, L" до %02u.%04u", st.wMonth, st.wYear);
+        name += buf;
+    }
+    return name;
+}
+
+// Переписывает name.key на читаемое дружественное имя (CP1251), сохраняя
+// исходный размер файла (добивка 0xFF). Формат: 30 <len+2> 16 <len> <строка>.
+void SetFriendlyName(std::vector<ContainerFile>* files,
+                     const std::wstring& name) {
+    for (ContainerFile& f : *files) {
+        if (f.name != L"name.key") continue;
+        int n = WideCharToMultiByte(1251, 0, name.c_str(), -1, nullptr, 0,
+                                    nullptr, nullptr);
+        std::string s(n > 0 ? n - 1 : 0, '\0');
+        if (n > 0)
+            WideCharToMultiByte(1251, 0, name.c_str(), -1, &s[0], n, nullptr,
+                                nullptr);
+        // Длина строки - один байт; ограничим с запасом.
+        if (s.size() > 250) s.resize(250);
+
+        size_t origSize = f.data.size();  // сохраняем размер (обычно 300)
+        std::vector<BYTE> nk;
+        nk.push_back(0x30);
+        nk.push_back(static_cast<BYTE>(s.size() + 2));
+        nk.push_back(0x16);
+        nk.push_back(static_cast<BYTE>(s.size()));
+        nk.insert(nk.end(), s.begin(), s.end());
+        while (nk.size() < origSize) nk.push_back(0xFF);  // добивка как в оригинале
+        if (nk.size() > origSize && origSize > 0) nk.resize(origSize);
+        f.data = nk;
+        return;
+    }
+}
+
 // Ридер rtComLite, на котором лежит папка folderId (имена не совпадают с FQCN).
 std::wstring FindReaderForFolder(int folderId) {
     for (const std::wstring& r : EnumReaders()) {
@@ -152,7 +200,7 @@ std::wstring BackupTargetPath(const ContainerInfo& c,
 
 BackupResult BackupToFolder(const ContainerInfo& c,
                             const std::wstring& targetBase, bool overwrite,
-                            bool clearExportFlag) {
+                            bool clearExportFlag, bool renameReadable) {
     BackupResult r;
     std::wstring subj = c.subjectCN + L" / " + c.Inn();
 
@@ -209,6 +257,7 @@ BackupResult BackupToFolder(const ContainerInfo& c,
     }
 
     if (clearExportFlag) ClearExportFlagInFiles(&r.files);
+    if (renameReadable) SetFriendlyName(&r.files, AutoFriendlyName(c));
 
     for (const ContainerFile& f : r.files) {
         if (!WriteBytes(r.dest + L"\\" + f.name, f.data)) {
@@ -258,7 +307,7 @@ std::wstring RegKeyPath(const std::wstring& sid, const std::wstring& name) {
 }  // namespace
 
 BackupResult BackupToRegistry(const ContainerInfo& c, bool overwrite,
-                              bool clearExportFlag) {
+                              bool clearExportFlag, bool renameReadable) {
     BackupResult r;
     std::wstring subj = c.subjectCN + L" / " + c.Inn();
 
@@ -320,6 +369,7 @@ BackupResult BackupToRegistry(const ContainerInfo& c, bool overwrite,
     }
 
     if (clearExportFlag) ClearExportFlagInFiles(&r.files);
+    if (renameReadable) SetFriendlyName(&r.files, AutoFriendlyName(c));
 
     for (const ContainerFile& f : r.files) {
         RegSetValueExW(key, f.name.c_str(), 0, REG_BINARY, f.data.data(),
@@ -364,7 +414,7 @@ bool CryptoProStoreExists(const ContainerInfo& c) {
 }
 
 BackupResult BackupToCryptoProStore(const ContainerInfo& c, bool overwrite,
-                                    bool clearExportFlag) {
+                                    bool clearExportFlag, bool renameReadable) {
     BackupResult r;
     std::wstring subj = c.subjectCN + L" / " + c.Inn();
 
@@ -408,6 +458,7 @@ BackupResult BackupToCryptoProStore(const ContainerInfo& c, bool overwrite,
     }
 
     if (clearExportFlag) ClearExportFlagInFiles(&r.files);
+    if (renameReadable) SetFriendlyName(&r.files, AutoFriendlyName(c));
 
     for (const ContainerFile& f : r.files) {
         if (!WriteBytes(r.dest + L"\\" + f.name, f.data)) {

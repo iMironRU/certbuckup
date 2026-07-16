@@ -7,7 +7,7 @@
 **Резервное копирование и миграция ключевых контейнеров КриптоПро —
 с человекочитаемым выбором контейнера.**
 
-[![build](https://github.com/OWNER/certbuckup/actions/workflows/build.yml/badge.svg)](https://github.com/OWNER/certbuckup/actions/workflows/build.yml)
+[![build](https://github.com/iMironRU/certbuckup/actions/workflows/build.yml/badge.svg)](https://github.com/iMironRU/certbuckup/actions/workflows/build.yml)
 [![license: GPL v3](https://img.shields.io/badge/license-GPLv3-blue.svg)](LICENSE)
 ![platform](https://img.shields.io/badge/Windows-7%2B-0078D6)
 ![lang](https://img.shields.io/badge/C%2B%2B17-static%20exe-00599C)

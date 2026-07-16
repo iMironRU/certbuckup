@@ -61,7 +61,7 @@
 - 📦 **Скачать:** [Releases](https://github.com/iMironRU/certbuckup/releases)
 - 📖 **Подробное руководство:** [docs/GUIDE.md](docs/GUIDE.md) —
   возможности, границы, архитектура, сборка, безопасность
-- 🌐 **Сайт:** [imironru.github.io/certbuckup](https://imironru.github.io/certbuckup/)
+- 🌐 **Сайт:** [imiron.ru/certbuckup](https://imiron.ru/certbuckup/)
 - 🗺️ **Планы и задачи:** [Issues](https://github.com/iMironRU/certbuckup/issues)
 
 ## Лицензия

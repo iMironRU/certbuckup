@@ -68,6 +68,10 @@ const WORD A_TAG = Attr(C_BG, C_ACCENT);
 // в Console::Init. По умолчанию - на случай дампа без консоли.
 int W = 104, H = 32;
 
+// Версия и репозиторий - показываются в футере и на экране окружения.
+const wchar_t* kVersion = L"0.1.0";
+const wchar_t* kRepoUrl = L"github.com/iMironRU/certbuckup";
+
 // --- Холст ------------------------------------------------------------------
 struct Canvas {
     std::vector<CHAR_INFO> cells;
@@ -228,6 +232,9 @@ struct State {
 void DrawFooter(Canvas& cv, const std::wstring& keys) {
     cv.Fill(0, H - 1, W, 1, A_DIM);
     cv.Text(2, H - 1, keys, A_DIM);
+    // Версия справа.
+    std::wstring ver = std::wstring(L"CertBuckUp ") + kVersion;
+    cv.Text(W - static_cast<int>(ver.size()) - 2, H - 1, ver, A_DIM);
 }
 
 void DrawWindow(Canvas& cv, const std::wstring& crumb, const std::wstring& right) {
@@ -469,6 +476,10 @@ void RenderEnvironment(Canvas& cv, const Environment& env,
     cv.Clear(A_BG);
     cv.Box(0, 0, W, H, A_BORDER);
     cv.Text(2, 0, L" Окружение ", A_ACC);
+    // Репозиторий и версия - в правой части шапки.
+    std::wstring brand = std::wstring(kRepoUrl) + L"  ·  v" + kVersion;
+    cv.Text(W - static_cast<int>(brand.size()) - 3, 0, L" " + brand + L" ",
+            A_DIM);
     int y = 2;
     for (const Capability& c : env.caps) {
         std::wstring mark = c.state == CapState::Present   ? L"[+]"

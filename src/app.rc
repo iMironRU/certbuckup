@@ -1,7 +1,36 @@
-// Ресурсы приложения. Иконка exe: Explorer показывает ресурс-иконку с
-// наименьшим числовым идентификатором, поэтому берём 1.
+// Ресурсы приложения.
 //
-// Файл иконки кладётся в assets/app.ico (формат .ico, желательно с
-// размерами 16/32/48/256). Makefile компилирует этот .rc только если .ico
-// существует, поэтому сборка не ломается, пока иконки нет.
+// Иконка exe: Explorer показывает ресурс-иконку с наименьшим числовым
+// идентификатором, поэтому берём 1. Файл иконки - assets/app.ico; Makefile
+// компилирует этот .rc только если .ico существует.
+//
+// VERSIONINFO - версия и сведения о продукте (видны в свойствах файла).
+// Строки в ASCII, чтобы не зависеть от кодировки при компиляции ресурса.
+
+#include <windows.h>
+
 1 ICON "assets/app.ico"
+
+VS_VERSION_INFO VERSIONINFO
+ FILEVERSION    0,1,0,0
+ PRODUCTVERSION 0,1,0,0
+ FILEOS VOS_NT_WINDOWS32
+ FILETYPE VFT_APP
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "040904b0"
+        BEGIN
+            VALUE "ProductName",      "CertBuckUp"
+            VALUE "FileDescription",  "CryptoPro key container backup"
+            VALUE "FileVersion",      "0.1.0"
+            VALUE "ProductVersion",   "0.1.0"
+            VALUE "LegalCopyright",   "GPL-3.0"
+            VALUE "Comments",         "github.com/iMironRU/certbuckup"
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x0409, 0x04b0
+    END
+END

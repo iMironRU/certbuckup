@@ -70,11 +70,19 @@ int W = 104, H = 32;
 
 // Версия и репозиторий - показываются в футере и на экране окружения.
 const wchar_t* kVersion = L"0.1.0";
-const wchar_t* kRepoUrl = L"github.com/iMironRU/certbuckup";
+const wchar_t* kRepoUrl = L"github.com/iMironRU/certbuckup";        // показ
+const wchar_t* kRepoUrlFull = L"https://github.com/iMironRU/certbuckup";  // ссылка
 
 // --- Холст ------------------------------------------------------------------
+// Кликабельная ссылка (OSC 8): участок текста на строке, за которым URL.
+struct Hyperlink {
+    int x, y, len;
+    std::wstring url;
+};
+
 struct Canvas {
     std::vector<CHAR_INFO> cells;
+    std::vector<Hyperlink> links;
     Canvas() : cells(W * H) { Clear(A_BG); }
 
     void Clear(WORD attr) {
@@ -82,6 +90,7 @@ struct Canvas {
             ci.Char.UnicodeChar = L' ';
             ci.Attributes = attr;
         }
+        links.clear();
     }
     void Put(int x, int y, wchar_t ch, WORD attr) {
         if (x < 0 || y < 0 || x >= W || y >= H) return;
@@ -92,6 +101,12 @@ struct Canvas {
         int n = static_cast<int>(s.size());
         if (maxw >= 0 && n > maxw) n = maxw;
         for (int i = 0; i < n; ++i) Put(x + i, y, s[i], attr);
+    }
+    // Текст-ссылка: рисует и регистрирует кликабельную область (OSC 8).
+    void LinkText(int x, int y, const std::wstring& s, WORD attr,
+                  const std::wstring& url) {
+        Text(x, y, s, attr);
+        links.push_back({x, y, static_cast<int>(s.size()), url});
     }
     void Fill(int x, int y, int w, int h, WORD attr) {
         for (int j = 0; j < h; ++j)
@@ -232,9 +247,10 @@ struct State {
 void DrawFooter(Canvas& cv, const std::wstring& keys) {
     cv.Fill(0, H - 1, W, 1, A_DIM);
     cv.Text(2, H - 1, keys, A_DIM);
-    // Версия справа.
+    // Версия справа - кликабельная ссылка на репозиторий.
     std::wstring ver = std::wstring(L"CertBuckUp ") + kVersion;
-    cv.Text(W - static_cast<int>(ver.size()) - 2, H - 1, ver, A_DIM);
+    cv.LinkText(W - static_cast<int>(ver.size()) - 2, H - 1, ver, A_DIM,
+                kRepoUrlFull);
 }
 
 void DrawWindow(Canvas& cv, const std::wstring& crumb, const std::wstring& right) {
@@ -476,10 +492,12 @@ void RenderEnvironment(Canvas& cv, const Environment& env,
     cv.Clear(A_BG);
     cv.Box(0, 0, W, H, A_BORDER);
     cv.Text(2, 0, L" Окружение ", A_ACC);
-    // Репозиторий и версия - в правой части шапки.
-    std::wstring brand = std::wstring(kRepoUrl) + L"  ·  v" + kVersion;
-    cv.Text(W - static_cast<int>(brand.size()) - 3, 0, L" " + brand + L" ",
-            A_DIM);
+    // Репозиторий (кликабельно) и версия - в правой части шапки.
+    std::wstring url = kRepoUrl;
+    std::wstring ver = std::wstring(L"  ·  v") + kVersion + L" ";
+    int x0 = W - static_cast<int>(url.size() + ver.size()) - 3;
+    cv.LinkText(x0, 0, url, A_ACC, kRepoUrlFull);
+    cv.Text(x0 + static_cast<int>(url.size()), 0, ver, A_DIM);
     int y = 2;
     for (const Capability& c : env.caps) {
         std::wstring mark = c.state == CapState::Present   ? L"[+]"
@@ -605,7 +623,24 @@ struct Console {
             wchar_t pos[16];
             swprintf(pos, 16, L"\x1b[%d;1H", y + 1);
             o += pos;
+            bool inLink = false;
+            int linkEnd = -1;
             for (int x = 0; x < W; ++x) {
+                // Закрыть/открыть кликабельную ссылку (OSC 8).
+                if (inLink && x == linkEnd) {
+                    o += L"\x1b]8;;\x1b\\";
+                    inLink = false;
+                }
+                if (!inLink) {
+                    for (const Hyperlink& lk : cv.links) {
+                        if (lk.y == y && lk.x == x) {
+                            o += L"\x1b]8;;" + lk.url + L"\x1b\\";
+                            inLink = true;
+                            linkEnd = x + lk.len;
+                            break;
+                        }
+                    }
+                }
                 const CHAR_INFO& ci = cv.cells[y * W + x];
                 if (ci.Attributes != cur) {
                     cur = ci.Attributes;
@@ -619,6 +654,7 @@ struct Console {
                 wchar_t ch = ci.Char.UnicodeChar;
                 o += (ch ? ch : L' ');
             }
+            if (inLink) o += L"\x1b]8;;\x1b\\";  // закрыть в конце строки
         }
         o += L"\x1b[0m";
         WriteVT(o);

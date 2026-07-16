@@ -130,32 +130,49 @@ std::wstring AutoFriendlyName(const ContainerInfo& c) {
     return name;
 }
 
-// Переписывает name.key на читаемое дружественное имя (CP1251), сохраняя
-// исходный размер файла (добивка 0xFF). Формат: 30 <len+2> 16 <len> <строка>.
+// Строит содержимое name.key с читаемым именем (CP1251), сохраняя исходный
+// размер (добивка 0xFF). Формат: 30 <len+2> 16 <len> <строка CP1251> ...FF.
+std::vector<BYTE> BuildNameKey(size_t origSize, const std::wstring& name) {
+    int n = WideCharToMultiByte(1251, 0, name.c_str(), -1, nullptr, 0, nullptr,
+                                nullptr);
+    std::string s(n > 0 ? n - 1 : 0, '\0');
+    if (n > 0)
+        WideCharToMultiByte(1251, 0, name.c_str(), -1, &s[0], n, nullptr,
+                            nullptr);
+    if (s.size() > 250) s.resize(250);  // длина - один байт
+
+    std::vector<BYTE> nk;
+    nk.push_back(0x30);
+    nk.push_back(static_cast<BYTE>(s.size() + 2));
+    nk.push_back(0x16);
+    nk.push_back(static_cast<BYTE>(s.size()));
+    nk.insert(nk.end(), s.begin(), s.end());
+    while (nk.size() < origSize) nk.push_back(0xFF);
+    if (nk.size() > origSize && origSize > 0) nk.resize(origSize);
+    return nk;
+}
+
+// Разбирает строку имени из содержимого name.key (обратно BuildNameKey).
+std::wstring ParseNameKey(const std::vector<BYTE>& data) {
+    if (data.size() < 4 || data[0] != 0x30 || data[2] != 0x16) return L"";
+    size_t len = data[3];
+    if (4 + len > data.size()) return L"";
+    std::string s(reinterpret_cast<const char*>(data.data() + 4), len);
+    int n = MultiByteToWideChar(1251, 0, s.c_str(), static_cast<int>(s.size()),
+                                nullptr, 0);
+    std::wstring w(n, L'\0');
+    MultiByteToWideChar(1251, 0, s.c_str(), static_cast<int>(s.size()), &w[0], n);
+    return w;
+}
+
+// Переписывает name.key в буфере файлов контейнера (для копирования).
 void SetFriendlyName(std::vector<ContainerFile>* files,
                      const std::wstring& name) {
     for (ContainerFile& f : *files) {
-        if (f.name != L"name.key") continue;
-        int n = WideCharToMultiByte(1251, 0, name.c_str(), -1, nullptr, 0,
-                                    nullptr, nullptr);
-        std::string s(n > 0 ? n - 1 : 0, '\0');
-        if (n > 0)
-            WideCharToMultiByte(1251, 0, name.c_str(), -1, &s[0], n, nullptr,
-                                nullptr);
-        // Длина строки - один байт; ограничим с запасом.
-        if (s.size() > 250) s.resize(250);
-
-        size_t origSize = f.data.size();  // сохраняем размер (обычно 300)
-        std::vector<BYTE> nk;
-        nk.push_back(0x30);
-        nk.push_back(static_cast<BYTE>(s.size() + 2));
-        nk.push_back(0x16);
-        nk.push_back(static_cast<BYTE>(s.size()));
-        nk.insert(nk.end(), s.begin(), s.end());
-        while (nk.size() < origSize) nk.push_back(0xFF);  // добивка как в оригинале
-        if (nk.size() > origSize && origSize > 0) nk.resize(origSize);
-        f.data = nk;
-        return;
+        if (f.name == L"name.key") {
+            f.data = BuildNameKey(f.data.size(), name);
+            return;
+        }
     }
 }
 
@@ -472,6 +489,145 @@ BackupResult BackupToCryptoProStore(const ContainerInfo& c, bool overwrite,
     JournalOp(L"backup-cp", subj, c.thumbprint, r.reader, r.dest, L"OK");
     r.ok = true;
     r.message = L"Скопировано в папку КриптоПро: " + r.name83;
+    return r;
+}
+
+// --- Переименование дружественного имени контейнера на месте ---------------
+
+namespace {
+
+enum RenameKind { RK_NONE, RK_REGISTRY, RK_HDIMAGE };
+
+// По уникальному имени (FQCN) определяет носитель и идентификатор хранилища:
+//   REGISTRY\<имя>           -> ключ реестра Keys\<имя>
+//   HDIMAGE\<папка>.000\...  -> папка %LOCALAPPDATA%\Crypto Pro\<папка>.000
+RenameKind LocateContainer(const ContainerInfo& c, std::wstring* id) {
+    std::vector<std::wstring> seg;
+    std::wstring cur;
+    for (wchar_t ch : c.uniqueName) {
+        if (ch == L'\\') {
+            if (!cur.empty()) seg.push_back(cur);
+            cur.clear();
+        } else {
+            cur.push_back(ch);
+        }
+    }
+    if (!cur.empty()) seg.push_back(cur);
+    if (seg.size() >= 2) {
+        if (_wcsicmp(seg[0].c_str(), L"REGISTRY") == 0) { *id = seg[1]; return RK_REGISTRY; }
+        if (_wcsicmp(seg[0].c_str(), L"HDIMAGE") == 0) { *id = seg[1]; return RK_HDIMAGE; }
+    }
+    return RK_NONE;
+}
+
+std::wstring HdimageNameKeyPath(const std::wstring& folder) {
+    return CryptoProStoreDir() + L"\\" + folder + L"\\name.key";
+}
+
+std::vector<BYTE> ReadFileBytes(const std::wstring& path) {
+    std::vector<BYTE> data;
+    HANDLE f = CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr,
+                           OPEN_EXISTING, 0, nullptr);
+    if (f == INVALID_HANDLE_VALUE) return data;
+    BYTE buf[1024];
+    DWORD rd = 0;
+    while (ReadFile(f, buf, sizeof(buf), &rd, nullptr) && rd)
+        data.insert(data.end(), buf, buf + rd);
+    CloseHandle(f);
+    return data;
+}
+
+}  // namespace
+
+std::wstring ReadableName(const ContainerInfo& c) { return AutoFriendlyName(c); }
+
+bool NameLooksLikeGuid(const std::wstring& s) {
+    if (s.size() < 16) return false;
+    int hex = 0, other = 0;
+    for (wchar_t ch : s) {
+        if (ch == L'-' || ch == L' ' || ch == L'.' || ch == L'_') continue;
+        bool ishex = (ch >= L'0' && ch <= L'9') || (ch >= L'a' && ch <= L'f') ||
+                     (ch >= L'A' && ch <= L'F');
+        if (ishex) ++hex; else ++other;
+    }
+    return other == 0 && hex >= 16;  // только hex + разделители, длинная строка
+}
+
+bool RenameSupported(const ContainerInfo& c) {
+    std::wstring id;
+    return LocateContainer(c, &id) != RK_NONE;
+}
+
+std::wstring ReadCurrentFriendlyName(const ContainerInfo& c) {
+    std::wstring id;
+    RenameKind k = LocateContainer(c, &id);
+    std::vector<BYTE> data;
+    if (k == RK_REGISTRY) {
+        std::wstring sid = CurrentUserSid();
+        if (sid.empty()) return L"";
+        HKEY h = nullptr;
+        if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, RegKeyPath(sid, id).c_str(), 0,
+                          KEY_READ, &h) != ERROR_SUCCESS)
+            return L"";
+        DWORD cb = 0, type = 0;
+        if (RegQueryValueExW(h, L"name.key", nullptr, &type, nullptr, &cb) ==
+                ERROR_SUCCESS && cb) {
+            data.resize(cb);
+            RegQueryValueExW(h, L"name.key", nullptr, &type, data.data(), &cb);
+        }
+        RegCloseKey(h);
+    } else if (k == RK_HDIMAGE) {
+        data = ReadFileBytes(HdimageNameKeyPath(id));
+    }
+    return ParseNameKey(data);
+}
+
+RenameResult RenameContainerInPlace(const ContainerInfo& c,
+                                    const std::wstring& newName) {
+    RenameResult r;
+    std::wstring id;
+    RenameKind k = LocateContainer(c, &id);
+    std::wstring subj = c.subjectCN + L" / " + c.Inn();
+
+    if (k == RK_REGISTRY) {
+        std::wstring sid = CurrentUserSid();
+        if (sid.empty()) { r.message = L"Не удалось определить SID."; return r; }
+        HKEY h = nullptr;
+        if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, RegKeyPath(sid, id).c_str(), 0,
+                          KEY_READ | KEY_WRITE, &h) != ERROR_SUCCESS) {
+            r.message = L"Нет доступа к реестру — запустите от администратора.";
+            return r;
+        }
+        DWORD cb = 0, type = 0;
+        RegQueryValueExW(h, L"name.key", nullptr, &type, nullptr, &cb);
+        std::vector<BYTE> nk = BuildNameKey(cb ? cb : 300, newName);
+        LONG rc = RegSetValueExW(h, L"name.key", 0, REG_BINARY, nk.data(),
+                                 static_cast<DWORD>(nk.size()));
+        RegCloseKey(h);
+        if (rc != ERROR_SUCCESS) { r.message = L"Ошибка записи в реестр."; return r; }
+    } else if (k == RK_HDIMAGE) {
+        std::wstring path = HdimageNameKeyPath(id);
+        std::vector<BYTE> old = ReadFileBytes(path);
+        std::vector<BYTE> nk = BuildNameKey(old.empty() ? 300 : old.size(), newName);
+        HANDLE w = CreateFileW(path.c_str(), GENERIC_WRITE, 0, nullptr,
+                               CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+        if (w == INVALID_HANDLE_VALUE) {
+            r.message = L"Не удалось открыть name.key для записи.";
+            return r;
+        }
+        DWORD wr = 0;
+        bool ok = WriteFile(w, nk.data(), static_cast<DWORD>(nk.size()), &wr,
+                            nullptr);
+        CloseHandle(w);
+        if (!ok) { r.message = L"Ошибка записи name.key."; return r; }
+    } else {
+        r.message = L"Переименование этого носителя пока не поддерживается.";
+        return r;
+    }
+
+    JournalOp(L"rename", subj, c.thumbprint, c.name, newName, L"OK");
+    r.ok = true;
+    r.message = L"Переименовано: " + newName;
     return r;
 }
 

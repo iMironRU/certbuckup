@@ -51,6 +51,30 @@ BackupResult BackupToRegistry(const ContainerInfo& c, bool overwrite = false,
 // Есть ли уже такой контейнер в реестре (для предупреждения о перезаписи).
 bool RegistryContainerExists(const ContainerInfo& c);
 
+// --- Переименование дружественного имени контейнера на месте ---------------
+
+// Похоже ли имя на GUID/hex-мусор (только hex + разделители, длинное).
+bool NameLooksLikeGuid(const std::wstring& s);
+
+// Поддерживается ли переименование этого контейнера на месте (безопасные
+// носители: реестр, папка КриптоПро). Токен/FAT12 - пока нет.
+bool RenameSupported(const ContainerInfo& c);
+
+// Текущее дружественное имя из name.key контейнера ("" если не прочитать).
+std::wstring ReadCurrentFriendlyName(const ContainerInfo& c);
+
+struct RenameResult {
+    bool ok = false;
+    std::wstring message;
+};
+
+// Переписывает name.key контейнера на newName (реестр или папка КриптоПро).
+RenameResult RenameContainerInPlace(const ContainerInfo& c,
+                                    const std::wstring& newName);
+
+// Человекочитаемое имя из данных сертификата (Организация ИНН до ММ.ГГГГ).
+std::wstring ReadableName(const ContainerInfo& c);
+
 // Копирует контейнер в хранилище КриптоПро на диске (HDIMAGE):
 // %LOCALAPPDATA%\Crypto Pro\<8.3-имя>.000 с 6 файлами. Per-user, без админа.
 // CryptoPro читает такой контейнер как локальный дисковый.

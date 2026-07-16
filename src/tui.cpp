@@ -199,6 +199,7 @@ struct LogRow {
 struct State {
     std::vector<ContainerInfo> items;
     std::vector<Tok> toks;
+    std::vector<bool> guidName;  // у контейнера сейчас GUID-образное имя
 
     Screen screen = Screen::Tokens;
     Modal modal = Modal::None;
@@ -288,16 +289,19 @@ void RenderCerts(Canvas& cv, const State& s) {
                             (c.thumbprint.size() >= 8 ? c.thumbprint.substr(0, 8)
                                                       : c.thumbprint);
         cv.Text(4, y + 1, L"  " + meta, sel ? A_SEL : A_DIM, W - 30);
+        bool guid = t.certIdx[k] < static_cast<int>(s.guidName.size()) &&
+                    s.guidName[t.certIdx[k]];
         std::wstring tag;
         if (c.medium == KeyMedium::HardWare) tag = L" устройство: только чтение ";
+        else if (guid) tag = L" имя-GUID: F6 переименовать ";
         else if (c.exportable == Exportable::No) tag = L" ключ неэкспортируемый ";
         if (!tag.empty())
             cv.Text(W - static_cast<int>(tag.size()) - 4, y, tag, A_TAG);
         y += 3;
     }
     DrawFooter(cv,
-               L"↑↓/колесо   F5 или 2×клик — копировать   F3 инфо   Esc назад "
-               L"  F10 выход");
+               L"↑↓   F5/2×клик копировать   F6 переименовать   F3 инфо   "
+               L"Esc назад   F10 выход");
 }
 
 void DrawDialog(Canvas& cv, int x, int y, int w, int h,
@@ -921,6 +925,10 @@ int RunTui() {
     }
     s.toks = BuildTokens(s.items);
     s.cspMajor = _wtoi(DetectCsp().version.c_str());  // "5.0" -> 5
+    // Пометить контейнеры с GUID-именем (на носителях, где умеем переименовать).
+    for (const ContainerInfo& it : s.items)
+        s.guidName.push_back(RenameSupported(it) &&
+                             NameLooksLikeGuid(ReadCurrentFriendlyName(it)));
     if (s.toks.empty()) {
         // Показать окружение и подсказку, дать прочитать, выйти по клавише.
         RenderEnvironment(cv, env,
@@ -1046,6 +1054,34 @@ int RunTui() {
             else if (vk == VK_F5) {
                 if (t.hardware) s.modal = Modal::Blocked;
                 else { s.modal = Modal::Dest; s.destCursor = 2; s.flagClear = false; }
+            }
+            else if (vk == VK_F6 && n > 0) {
+                // Переименовать контейнер на месте (реестр/папка КриптоПро).
+                int gi = t.certIdx[s.certCursor];
+                const ContainerInfo& cc = s.items[gi];
+                LogRow row;
+                row.ts = NowHHMM();
+                row.org = OrgName(cc);
+                row.inn = LegalInn(cc);
+                row.dest = L"имя контейнера";
+                if (!RenameSupported(cc)) {
+                    s.resultKind = 2;
+                    s.resultMsg = L"Переименование этого носителя пока не "
+                                  L"поддерживается (реестр и папка КриптоПро — да).";
+                    row.ok = false;
+                    row.status = L"не поддерж.";
+                } else {
+                    RenameResult rr =
+                        RenameContainerInPlace(cc, ReadableName(cc));
+                    s.resultKind = rr.ok ? 0 : 2;
+                    s.resultMsg = OrgName(cc) + L"  —  " + rr.message;
+                    row.ok = rr.ok;
+                    row.status = rr.ok ? L"Переименовано" : L"Ошибка";
+                    if (rr.ok && gi < static_cast<int>(s.guidName.size()))
+                        s.guidName[gi] = false;
+                }
+                s.log.push_back(row);
+                s.modal = Modal::Result;
             }
         }
     }

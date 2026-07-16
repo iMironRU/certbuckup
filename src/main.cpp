@@ -125,6 +125,7 @@ int main(int argc, char** argv) {
     bool textList = false;           // --list: текстовый вывод вместо TUI
     bool backupToReg = false;        // --backup-reg: копия в реестр
     bool backupToCp = false;         // --backup-cp: копия в папку КриптоПро
+    bool renameOne = false;          // --rename: переименовать на месте
     int backupIndex = 0;             // 1-based номер строки для --backup
     std::wstring targetBase;         // --to; по умолчанию папка cert рядом с exe
     for (int i = 1; i < argc; ++i) {
@@ -155,6 +156,10 @@ int main(int argc, char** argv) {
         if (a == "--backup-cp" && i + 1 < argc) {
             backupIndex = atoi(argv[++i]);
             backupToCp = true;
+        }
+        if (a == "--rename" && i + 1 < argc) {
+            backupIndex = atoi(argv[++i]);
+            renameOne = true;
         }
         if (a == "--to" && i + 1 < argc) {
             std::string t = argv[++i];
@@ -219,6 +224,17 @@ int main(int argc, char** argv) {
                 c.subjectCN + L" (" + c.Inn() + L"), до " +
                 certmig::FormatDate(c.notAfter));
         OutLine();
+        if (renameOne) {
+            OutLine(L"Текущее имя: " + certmig::ReadCurrentFriendlyName(c) +
+                    (certmig::NameLooksLikeGuid(
+                         certmig::ReadCurrentFriendlyName(c))
+                         ? L"  (похоже на GUID)"
+                         : L""));
+            certmig::RenameResult rr =
+                certmig::RenameContainerInPlace(c, certmig::ReadableName(c));
+            OutLine(rr.message);
+            return rr.ok ? 0 : 3;
+        }
         if (backupToReg || backupToCp) {
             certmig::BackupResult r = backupToReg
                                           ? certmig::BackupToRegistry(c)

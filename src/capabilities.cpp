@@ -5,6 +5,7 @@
 #include <urlmon.h>
 #include <shellapi.h>
 #include <winhttp.h>
+#include <objbase.h>
 
 #include <string>
 
@@ -118,15 +119,38 @@ bool InstallRtComLite(std::wstring* status) {
         *status = L"не удалось скачать (нет сети?)";
         return false;
     }
-    // Запускаем установщик - у него собственный интерфейс.
-    HINSTANCE r = ShellExecuteW(nullptr, L"open", dest.c_str(), nullptr, nullptr,
-                                SW_SHOWNORMAL);
-    if (reinterpret_cast<INT_PTR>(r) <= 32) {
-        *status = L"не удалось запустить установщик";
+
+    // Тихая установка: у инсталлятора Контура ядро NSIS, ключ /S ставит без
+    // мастера. Регистрация COM-компонента требует прав администратора, поэтому
+    // без повышения запускаем через "runas" (один запрос UAC), иначе "open".
+    // Ждём завершения и проверяем, что компонент реально зарегистрировался.
+    *status = L"устанавливаю rtComLite (тихо)…";
+    SHELLEXECUTEINFOW sei;
+    ZeroMemory(&sei, sizeof(sei));
+    sei.cbSize = sizeof(sei);
+    sei.fMask = SEE_MASK_NOCLOSEPROCESS;
+    sei.lpVerb = IsProcessElevated() ? L"open" : L"runas";
+    sei.lpFile = dest.c_str();
+    sei.lpParameters = L"/S";
+    sei.nShow = SW_HIDE;
+    if (!ShellExecuteExW(&sei) || !sei.hProcess) {
+        *status = L"не удалось запустить установку (UAC отклонён?)";
         return false;
     }
-    *status = L"установщик запущен — завершите установку и перезапустите";
-    return true;
+    WaitForSingleObject(sei.hProcess, 180000);  // до 3 минут на установку
+    CloseHandle(sei.hProcess);
+
+    // Проверяем регистрацию COM-компонента Рутокена.
+    CLSID clsid;
+    bool registered =
+        SUCCEEDED(CLSIDFromProgID(L"rtCOMLite.rtContext", &clsid));
+    if (registered) {
+        *status = L"rtComLite установлен.";
+        return true;
+    }
+    *status = L"установка завершилась, но компонент не найден — перезапустите "
+              L"программу или поставьте вручную.";
+    return false;
 }
 
 Environment ProbeEnvironment() {

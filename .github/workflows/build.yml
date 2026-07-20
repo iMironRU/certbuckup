@@ -36,8 +36,14 @@ jobs:
             echo "ОШИБКА: небезопасная для Windows 7 зависимость"; exit 1
           fi
 
+      - name: Версия из app.rc
+        run: |
+          VER=$(grep -oP 'ProductVersion",\s*"\K[0-9.]+' src/app.rc | head -1)
+          echo "VER=$VER" >> $GITHUB_ENV
+          cp build/CertBuckUp.exe "build/CertBuckUp-$VER.exe"
+
       - name: Артефакт
         uses: actions/upload-artifact@v4
         with:
-          name: CertBuckUp
-          path: build/CertBuckUp.exe
+          name: CertBuckUp-${{ env.VER }}
+          path: build/CertBuckUp-${{ env.VER }}.exe

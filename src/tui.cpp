@@ -73,7 +73,7 @@ const WORD A_WARNTAG = Attr(C_BG, C_WARN);    // плашка "битая коп
 int W = 104, H = 32;
 
 // Версия и репозиторий - показываются в футере и на экране окружения.
-const wchar_t* kVersion = L"0.4.0";
+const wchar_t* kVersion = L"0.4.1";
 const wchar_t* kRepoUrl = L"github.com/iMironRU/certbuckup";        // показ
 const wchar_t* kRepoUrlFull = L"https://github.com/iMironRU/certbuckup";  // ссылка
 
@@ -1022,7 +1022,9 @@ int RunTui() {
         }
         if (vk == 'D' && rtMissing()) {
             std::wstring st;
-            RenderEnvironment(cv, env, L"Скачиваю и запускаю установщик rtComLite…");
+            RenderEnvironment(cv, env,
+                              L"Скачиваю и тихо устанавливаю rtComLite… (будет "
+                              L"запрос прав администратора)");
             con.Present(cv);
             InstallRtComLite(&st);
             afterAction(st);

@@ -75,6 +75,32 @@ RenameResult RenameContainerInPlace(const ContainerInfo& c,
 // Человекочитаемое имя из данных сертификата (Организация ИНН до ММ.ГГГГ).
 std::wstring ReadableName(const ContainerInfo& c);
 
+// --- Проверка и починка раскладки primary/masks в готовой копии -------------
+//
+// До версии 0.2.0 копии с токена писались с перепутанными primary<->masks и
+// primary2<->masks2 — контейнер целый, но закрытый ключ не собирался. Такие
+// копии чинятся простой перестановкой файлов, без повторного чтения токена.
+enum class CopyLayout {
+    NotApplicable,  // не файловая копия (токен/аппаратный) — проверять нечего
+    Ok,             // primary/masks на своих местах
+    Swapped,        // primary<->masks перепутаны — чинится
+    Unknown,        // не удалось распознать (не трогаем)
+};
+
+// Определяет раскладку по сигнатуре файлов primary.key/masks.key копии
+// (реестр, HDIMAGE или FAT12). Ничего не меняет.
+CopyLayout DetectCopyLayout(const ContainerInfo& c);
+
+struct RepairResult {
+    bool ok = false;
+    std::wstring message;
+};
+
+// Чинит битую копию: переставляет primary<->masks и primary2<->masks2 местами
+// на том же носителе. Безопасно и идемпотентно (повторный вызов ничего не
+// делает). Реестр требует прав администратора; HDIMAGE/FAT12 — нет.
+RepairResult RepairContainerLayout(const ContainerInfo& c);
+
 // Копирует контейнер в хранилище КриптоПро на диске (HDIMAGE):
 // %LOCALAPPDATA%\Crypto Pro\<8.3-имя>.000 с 6 файлами. Per-user, без админа.
 // CryptoPro читает такой контейнер как локальный дисковый.

@@ -20,6 +20,7 @@ enum {
     C_BG = 0,       // фон #161826
     C_SURFACE = 1,  // поверхность окна/диалога #232532
     C_NEUTRAL = 2,  // нейтраль-900 #292b31
+    C_WARN = 4,     // предупреждение (битая копия) #e06c75
     C_ACCENT = 5,   // акцент #9184d9
     C_DIM = 8,      // приглушённый текст
     C_TEXT = 7,     // основной текст #e9e9ed
@@ -39,6 +40,7 @@ void InitPalette() {
     g_pal[C_BG] = Rgb(0x16, 0x18, 0x26);
     g_pal[C_SURFACE] = Rgb(0x23, 0x25, 0x32);
     g_pal[C_NEUTRAL] = Rgb(0x29, 0x2b, 0x31);
+    g_pal[C_WARN] = Rgb(0xe0, 0x6c, 0x75);
     g_pal[C_ACCENT] = Rgb(0x91, 0x84, 0xd9);
     g_pal[C_DIM] = Rgb(0x8a, 0x87, 0x94);
     g_pal[C_TEXT] = Rgb(0xe9, 0xe9, 0xed);
@@ -63,6 +65,8 @@ const WORD A_SURF = Attr(C_TEXT, C_SURFACE);
 const WORD A_SURFDIM = Attr(C_DIM, C_SURFACE);
 const WORD A_SURFACC = Attr(C_ACCENTHI, C_SURFACE);
 const WORD A_TAG = Attr(C_BG, C_ACCENT);
+const WORD A_WARN = Attr(C_WARN, C_BG);       // текст-предупреждение
+const WORD A_WARNTAG = Attr(C_BG, C_WARN);    // плашка "битая копия"
 
 // Размер холста. Не константы: подстраиваются под фактическое окно консоли
 // в Console::Init. По умолчанию - на случай дампа без консоли.
@@ -219,6 +223,7 @@ struct State {
     std::vector<ContainerInfo> items;
     std::vector<Tok> toks;
     std::vector<bool> guidName;  // у контейнера сейчас GUID-образное имя
+    std::vector<int> copyLayout;  // раскладка копии: см. CopyLayout (0..3)
 
     Screen screen = Screen::Tokens;
     Modal modal = Modal::None;
@@ -312,19 +317,30 @@ void RenderCerts(Canvas& cv, const State& s) {
                             (c.thumbprint.size() >= 8 ? c.thumbprint.substr(0, 8)
                                                       : c.thumbprint);
         cv.Text(4, y + 1, L"  " + meta, sel ? A_SEL : A_DIM, W - 30);
-        bool guid = t.certIdx[k] < static_cast<int>(s.guidName.size()) &&
-                    s.guidName[t.certIdx[k]];
+        int gi = t.certIdx[k];
+        bool broken = gi < static_cast<int>(s.copyLayout.size()) &&
+                      s.copyLayout[gi] ==
+                          static_cast<int>(CopyLayout::Swapped);
+        bool guid = gi < static_cast<int>(s.guidName.size()) && s.guidName[gi];
         std::wstring tag;
-        if (c.medium == KeyMedium::HardWare) tag = L" устройство: только чтение ";
-        else if (guid) tag = L" имя-GUID: F6 переименовать ";
-        else if (c.exportable == Exportable::No) tag = L" ключ неэкспортируемый ";
+        WORD tagAttr = A_TAG;
+        if (broken) {  // важнее прочего: копия не даст рабочий ключ, пока не чинить
+            tag = L" битая копия · F7 починить ";
+            tagAttr = A_WARNTAG;
+        } else if (c.medium == KeyMedium::HardWare) {
+            tag = L" устройство: только чтение ";
+        } else if (guid) {
+            tag = L" имя-GUID: F6 переименовать ";
+        } else if (c.exportable == Exportable::No) {
+            tag = L" ключ неэкспортируемый ";
+        }
         if (!tag.empty())
-            cv.Text(W - static_cast<int>(tag.size()) - 4, y, tag, A_TAG);
+            cv.Text(W - static_cast<int>(tag.size()) - 4, y, tag, tagAttr);
         y += 3;
     }
     DrawFooter(cv,
-               L"↑↓   F5/2×клик копировать   F6 переименовать   F3 инфо   "
-               L"Esc назад   F10 выход");
+               L"↑↓   F5 копировать   F6 переименовать   F7 починить   "
+               L"F3 инфо   Esc назад   F10 выход");
 }
 
 void DrawDialog(Canvas& cv, int x, int y, int w, int h,
@@ -595,6 +611,7 @@ struct Console {
             info.ColorTable[C_BG] = g_pal[C_BG];
             info.ColorTable[C_SURFACE] = g_pal[C_SURFACE];
             info.ColorTable[C_NEUTRAL] = g_pal[C_NEUTRAL];
+            info.ColorTable[C_WARN] = g_pal[C_WARN];
             info.ColorTable[C_ACCENT] = g_pal[C_ACCENT];
             info.ColorTable[C_ACCENTHI] = g_pal[C_ACCENTHI];
             info.ColorTable[C_DIM] = g_pal[C_DIM];
@@ -976,6 +993,9 @@ int RunTui() {
     for (const ContainerInfo& it : s.items)
         s.guidName.push_back(RenameSupported(it) &&
                              NameLooksLikeGuid(ReadCurrentFriendlyName(it)));
+    // Пометить копии с перепутанной раскладкой primary/masks (битые до 0.2.0).
+    for (const ContainerInfo& it : s.items)
+        s.copyLayout.push_back(static_cast<int>(DetectCopyLayout(it)));
     if (s.toks.empty()) {
         // Показать окружение и подсказку, дать прочитать, выйти по клавише.
         RenderEnvironment(cv, env,
@@ -1130,6 +1150,36 @@ int RunTui() {
                 s.log.push_back(row);
                 s.modal = Modal::Result;
             }
+            else if (vk == VK_F7 && n > 0) {
+                // Починить битую копию: переставить primary/masks на месте.
+                int gi = t.certIdx[s.certCursor];
+                const ContainerInfo& cc = s.items[gi];
+                LogRow row;
+                row.ts = NowHHMM();
+                row.org = OrgName(cc);
+                row.inn = LegalInn(cc);
+                row.dest = L"починка копии";
+                bool broken = gi < static_cast<int>(s.copyLayout.size()) &&
+                              s.copyLayout[gi] ==
+                                  static_cast<int>(CopyLayout::Swapped);
+                if (!broken) {
+                    s.resultKind = 1;
+                    s.resultMsg =
+                        OrgName(cc) + L"  —  контейнер не помечен как битый.";
+                    row.ok = false;
+                    row.status = L"не требуется";
+                } else {
+                    RepairResult rr = RepairContainerLayout(cc);
+                    s.resultKind = rr.ok ? 0 : 2;
+                    s.resultMsg = OrgName(cc) + L"  —  " + rr.message;
+                    row.ok = rr.ok;
+                    row.status = rr.ok ? L"Починено" : L"Ошибка";
+                    if (rr.ok)
+                        s.copyLayout[gi] = static_cast<int>(CopyLayout::Ok);
+                }
+                s.log.push_back(row);
+                s.modal = Modal::Result;
+            }
         }
     }
 
@@ -1161,6 +1211,8 @@ int RunTuiDump() {
     State s;
     s.items = EnumerateContainers();
     s.toks = BuildTokens(s.items);
+    for (const ContainerInfo& it : s.items)
+        s.copyLayout.push_back(static_cast<int>(DetectCopyLayout(it)));
     Canvas cv;
 
     fputs("===== ЭКРАН: Токены =====\n", stdout);
@@ -1169,7 +1221,14 @@ int RunTuiDump() {
 
     if (!s.toks.empty()) {
         fputs("\n===== ЭКРАН: Сертификаты =====\n", stdout);
+        // Показать носитель, где есть битая копия (для проверки бейджа), иначе 0.
         s.selTok = 0;
+        for (int ti = 0; ti < static_cast<int>(s.toks.size()); ++ti)
+            for (int gi : s.toks[ti].certIdx)
+                if (gi < static_cast<int>(s.copyLayout.size()) &&
+                    s.copyLayout[gi] == static_cast<int>(CopyLayout::Swapped)) {
+                    s.selTok = ti;
+                }
         RenderCerts(cv, s);
         DumpCanvas(cv);
 

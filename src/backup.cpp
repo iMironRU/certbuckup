@@ -631,4 +631,181 @@ RenameResult RenameContainerInPlace(const ContainerInfo& c,
     return r;
 }
 
+// --- Проверка и починка раскладки primary/masks -----------------------------
+
+namespace {
+
+// Где физически лежит копия и как читать/писать её файлы-значения.
+struct CopyLoc {
+    enum Kind { None, Reg, Dir } kind = None;
+    std::wstring regName;  // для Reg: 8.3-имя ключа реестра
+    std::wstring dir;      // для Dir: папка (HDIMAGE или FAT12) с .key-файлами
+};
+
+std::vector<std::wstring> SplitBackslash(const std::wstring& s) {
+    std::vector<std::wstring> seg;
+    std::wstring cur;
+    for (wchar_t ch : s) {
+        if (ch == L'\\') { if (!cur.empty()) seg.push_back(cur); cur.clear(); }
+        else cur.push_back(ch);
+    }
+    if (!cur.empty()) seg.push_back(cur);
+    return seg;
+}
+
+// FAT12-контейнер: файлы в папке <буква диска>\<номер>. Буква в FQCN не
+// указана — сканируем логические диски в поиске папки с ключевыми файлами.
+std::wstring FindFat12Dir(const std::wstring& folder) {
+    wchar_t drives[256];
+    DWORD n = GetLogicalDriveStringsW(255, drives);
+    if (n == 0 || n > 255) return L"";
+    for (wchar_t* p = drives; *p; p += wcslen(p) + 1) {
+        std::wstring dir = std::wstring(p);  // оканчивается на "\\", напр. "D:\\"
+        if (!dir.empty() && dir.back() != L'\\') dir += L'\\';
+        dir += folder;
+        if (GetFileAttributesW((dir + L"\\primary.key").c_str()) !=
+            INVALID_FILE_ATTRIBUTES)
+            return dir;
+    }
+    return L"";
+}
+
+CopyLoc LocateCopy(const ContainerInfo& c) {
+    CopyLoc loc;
+    std::vector<std::wstring> seg = SplitBackslash(c.uniqueName);
+    if (seg.size() >= 2 && _wcsicmp(seg[0].c_str(), L"REGISTRY") == 0) {
+        loc.kind = CopyLoc::Reg;
+        loc.regName = seg[1];
+    } else if (seg.size() >= 2 && _wcsicmp(seg[0].c_str(), L"HDIMAGE") == 0) {
+        loc.kind = CopyLoc::Dir;
+        loc.dir = CryptoProStoreDir() + L"\\" + seg[1];
+    } else if (seg.size() >= 3 && _wcsicmp(seg[0].c_str(), L"FAT12") == 0) {
+        std::wstring d = FindFat12Dir(seg[2]);
+        if (!d.empty()) { loc.kind = CopyLoc::Dir; loc.dir = d; }
+    }
+    return loc;
+}
+
+std::vector<BYTE> ReadCopyValue(const CopyLoc& loc, const wchar_t* name) {
+    if (loc.kind == CopyLoc::Reg) {
+        std::wstring sid = CurrentUserSid();
+        if (sid.empty()) return {};
+        HKEY h = nullptr;
+        if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, RegKeyPath(sid, loc.regName).c_str(),
+                          0, KEY_READ, &h) != ERROR_SUCCESS)
+            return {};
+        std::vector<BYTE> data;
+        DWORD cb = 0, type = 0;
+        if (RegQueryValueExW(h, name, nullptr, &type, nullptr, &cb) ==
+                ERROR_SUCCESS && cb) {
+            data.resize(cb);
+            RegQueryValueExW(h, name, nullptr, &type, data.data(), &cb);
+        }
+        RegCloseKey(h);
+        return data;
+    }
+    if (loc.kind == CopyLoc::Dir) return ReadFileBytes(loc.dir + L"\\" + name);
+    return {};
+}
+
+bool WriteCopyValue(const CopyLoc& loc, const wchar_t* name,
+                    const std::vector<BYTE>& data) {
+    if (loc.kind == CopyLoc::Reg) {
+        std::wstring sid = CurrentUserSid();
+        if (sid.empty()) return false;
+        HKEY h = nullptr;
+        if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, RegKeyPath(sid, loc.regName).c_str(),
+                          0, KEY_WRITE, &h) != ERROR_SUCCESS)
+            return false;
+        LONG rc = RegSetValueExW(h, name, 0, REG_BINARY, data.data(),
+                                 static_cast<DWORD>(data.size()));
+        RegCloseKey(h);
+        return rc == ERROR_SUCCESS;
+    }
+    if (loc.kind == CopyLoc::Dir) {
+        std::wstring path = loc.dir + L"\\" + name;
+        HANDLE w = CreateFileW(path.c_str(), GENERIC_WRITE, 0, nullptr,
+                               CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+        if (w == INVALID_HANDLE_VALUE) return false;
+        DWORD wr = 0;
+        bool ok = WriteFile(w, data.data(), static_cast<DWORD>(data.size()), &wr,
+                            nullptr) &&
+                  wr == data.size();
+        CloseHandle(w);
+        return ok;
+    }
+    return false;
+}
+
+// Файл-«primary» по сигнатуре: 30 22 04 20 … (две 32-байтные части).
+bool LooksPrimary(const std::vector<BYTE>& b) {
+    return b.size() >= 4 && b[0] == 0x30 && b[1] == 0x22 && b[2] == 0x04 &&
+           b[3] == 0x20;
+}
+// Файл-«masks» по сигнатуре: 30 36 04 20 …
+bool LooksMasks(const std::vector<BYTE>& b) {
+    return b.size() >= 4 && b[0] == 0x30 && b[1] == 0x36 && b[2] == 0x04 &&
+           b[3] == 0x20;
+}
+
+}  // namespace
+
+CopyLayout DetectCopyLayout(const ContainerInfo& c) {
+    // Токенные и аппаратные контейнеры — источник истины, не копии.
+    if (c.medium == KeyMedium::FileToken || c.medium == KeyMedium::HardWare)
+        return CopyLayout::NotApplicable;
+    CopyLoc loc = LocateCopy(c);
+    if (loc.kind == CopyLoc::None) return CopyLayout::NotApplicable;
+
+    std::vector<BYTE> pri = ReadCopyValue(loc, L"primary.key");
+    std::vector<BYTE> mas = ReadCopyValue(loc, L"masks.key");
+    if (pri.empty() || mas.empty()) return CopyLayout::Unknown;
+
+    if (LooksMasks(pri) && LooksPrimary(mas)) return CopyLayout::Swapped;
+    if (LooksPrimary(pri) && LooksMasks(mas)) return CopyLayout::Ok;
+    return CopyLayout::Unknown;  // нестандартная структура — не трогаем
+}
+
+RepairResult RepairContainerLayout(const ContainerInfo& c) {
+    RepairResult r;
+    std::wstring subj = c.subjectCN + L" / " + c.Inn();
+
+    if (DetectCopyLayout(c) != CopyLayout::Swapped) {
+        r.message = L"Починка не требуется (раскладка в порядке или неизвестна).";
+        return r;
+    }
+    CopyLoc loc = LocateCopy(c);
+
+    std::vector<BYTE> pri = ReadCopyValue(loc, L"primary.key");
+    std::vector<BYTE> mas = ReadCopyValue(loc, L"masks.key");
+    std::vector<BYTE> pri2 = ReadCopyValue(loc, L"primary2.key");
+    std::vector<BYTE> mas2 = ReadCopyValue(loc, L"masks2.key");
+    if (pri.empty() || mas.empty()) {
+        r.message = L"Не удалось прочитать файлы контейнера.";
+        return r;
+    }
+
+    // Перестановка: primary <- masks, masks <- primary (и вторая пара).
+    bool ok = WriteCopyValue(loc, L"primary.key", mas) &&
+              WriteCopyValue(loc, L"masks.key", pri);
+    if (ok && !pri2.empty() && !mas2.empty()) {
+        ok = WriteCopyValue(loc, L"primary2.key", mas2) &&
+             WriteCopyValue(loc, L"masks2.key", pri2);
+    }
+
+    if (!ok) {
+        r.message = (loc.kind == CopyLoc::Reg)
+                        ? L"Ошибка записи в реестр (нужны права администратора?)."
+                        : L"Ошибка записи при починке.";
+        JournalOp(L"repair", subj, c.thumbprint, c.name, c.uniqueName,
+                  L"ошибка записи");
+        return r;
+    }
+    JournalOp(L"repair", subj, c.thumbprint, c.name, c.uniqueName,
+              L"OK: primary/masks переставлены");
+    r.ok = true;
+    r.message = L"Починено: primary/masks переставлены местами.";
+    return r;
+}
+
 }  // namespace certmig

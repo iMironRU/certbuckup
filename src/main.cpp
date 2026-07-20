@@ -127,6 +127,8 @@ int main(int argc, char** argv) {
     bool backupToCp = false;         // --backup-cp: копия в папку КриптоПро
     bool renameOne = false;          // --rename: переименовать на месте
     bool noRename = false;           // --norename: копировать без переписи name.key
+    bool repairOne = false;          // --repair N: починить раскладку primary/masks
+    bool checkCopies = false;        // --check-copies: статус раскладки всех копий
     int backupIndex = 0;             // 1-based номер строки для --backup
     std::wstring targetBase;         // --to; по умолчанию папка cert рядом с exe
     for (int i = 1; i < argc; ++i) {
@@ -163,6 +165,11 @@ int main(int argc, char** argv) {
             renameOne = true;
         }
         if (a == "--norename") noRename = true;
+        if (a == "--repair" && i + 1 < argc) {
+            backupIndex = atoi(argv[++i]);
+            repairOne = true;
+        }
+        if (a == "--check-copies") checkCopies = true;
         if (a == "--to" && i + 1 < argc) {
             std::string t = argv[++i];
             int need = MultiByteToWideChar(CP_ACP, 0, t.c_str(), -1, nullptr, 0);
@@ -191,7 +198,8 @@ int main(int argc, char** argv) {
     }
 
     // По умолчанию (без текстовых флагов) - интерфейс.
-    if (!envOnly && !textList && backupIndex == 0) return certmig::RunTui();
+    if (!envOnly && !textList && !checkCopies && backupIndex == 0)
+        return certmig::RunTui();
 
     // ТЗ 3: проба окружения. Показываем, что есть и что из этого можно.
     certmig::Environment env = certmig::ProbeEnvironment();
@@ -213,6 +221,33 @@ int main(int argc, char** argv) {
         return 0;
     }
 
+    // Проверка раскладки primary/masks у всех файловых копий.
+    if (checkCopies) {
+        OutLine(L"Проверка раскладки копий (битые — с перепутанными "
+                L"primary/masks):");
+        OutLine();
+        int broken = 0, checked = 0;
+        int idx = 0;
+        for (const certmig::ContainerInfo& c : items) {
+            ++idx;
+            certmig::CopyLayout lay = certmig::DetectCopyLayout(c);
+            if (lay == certmig::CopyLayout::NotApplicable) continue;
+            ++checked;
+            std::wstring st = lay == certmig::CopyLayout::Ok ? L"[ OK ]"
+                              : lay == certmig::CopyLayout::Swapped
+                                  ? L"[БИТАЯ]  ← чинится: --repair " +
+                                        std::to_wstring(idx)
+                                  : L"[?]";
+            if (lay == certmig::CopyLayout::Swapped) ++broken;
+            OutLine(L"  №" + std::to_wstring(idx) + L"  " + st + L"  " +
+                    c.subjectCN + L" (" + c.Inn() + L")  " + c.uniqueName);
+        }
+        OutLine();
+        OutLine(L"Копий проверено: " + std::to_wstring(checked) +
+                L", битых: " + std::to_wstring(broken));
+        return broken > 0 ? 1 : 0;
+    }
+
     // Резервное копирование выбранного контейнера (ТЗ 2.2).
     if (backupIndex > 0) {
         if (backupIndex > static_cast<int>(items.size())) {
@@ -226,6 +261,17 @@ int main(int argc, char** argv) {
                 c.subjectCN + L" (" + c.Inn() + L"), до " +
                 certmig::FormatDate(c.notAfter));
         OutLine();
+        if (repairOne) {
+            certmig::CopyLayout lay = certmig::DetectCopyLayout(c);
+            OutLine(lay == certmig::CopyLayout::Swapped
+                        ? L"Раскладка битая — переставляю primary/masks…"
+                    : lay == certmig::CopyLayout::Ok
+                        ? L"Раскладка уже правильная."
+                        : L"Это не файловая копия или структура не распознана.");
+            certmig::RepairResult rr = certmig::RepairContainerLayout(c);
+            OutLine(rr.message);
+            return rr.ok ? 0 : (lay == certmig::CopyLayout::Ok ? 0 : 3);
+        }
         if (renameOne) {
             OutLine(L"Текущее имя: " + certmig::ReadCurrentFriendlyName(c) +
                     (certmig::NameLooksLikeGuid(

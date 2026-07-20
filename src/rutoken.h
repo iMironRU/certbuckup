@@ -27,8 +27,10 @@ namespace certmig {
 
 // Смещение файла внутри папки-контейнера задаёт его тип. Проверено на живых
 // Rutoken Lite: база 0x0A00/0x0B00/0x0C00, файлы база+1..база+6.
-//   +1 primary.key (60)   +2 masks.key (70)   +3 header.key (с сертификатом)
-//   +4 primary2.key (60)  +5 masks2.key (70)  +6 name.key (имя контейнера)
+//   +1 masks.key (60)     +2 primary.key (70)  +3 header.key (с сертификатом)
+//   +4 masks2.key (60)    +5 primary2.key (70) +6 name.key (имя контейнера)
+// (раскладку primary/masks выверяли побайтово против рабочей копии Контура —
+//  см. комментарий в ContainerFileName в rutoken.cpp)
 const wchar_t* ContainerFileName(int offset);  // 1..6 -> "primary.key" и т.д.
 
 // Один файл контейнера, прочитанный с токена.

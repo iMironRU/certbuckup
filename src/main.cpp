@@ -126,6 +126,7 @@ int main(int argc, char** argv) {
     bool backupToReg = false;        // --backup-reg: копия в реестр
     bool backupToCp = false;         // --backup-cp: копия в папку КриптоПро
     bool renameOne = false;          // --rename: переименовать на месте
+    bool noRename = false;           // --norename: копировать без переписи name.key
     int backupIndex = 0;             // 1-based номер строки для --backup
     std::wstring targetBase;         // --to; по умолчанию папка cert рядом с exe
     for (int i = 1; i < argc; ++i) {
@@ -161,6 +162,7 @@ int main(int argc, char** argv) {
             backupIndex = atoi(argv[++i]);
             renameOne = true;
         }
+        if (a == "--norename") noRename = true;
         if (a == "--to" && i + 1 < argc) {
             std::string t = argv[++i];
             int need = MultiByteToWideChar(CP_ACP, 0, t.c_str(), -1, nullptr, 0);
@@ -236,9 +238,11 @@ int main(int argc, char** argv) {
             return rr.ok ? 0 : 3;
         }
         if (backupToReg || backupToCp) {
-            certmig::BackupResult r = backupToReg
-                                          ? certmig::BackupToRegistry(c)
-                                          : certmig::BackupToCryptoProStore(c);
+            bool rename = !noRename;
+            certmig::BackupResult r =
+                backupToReg
+                    ? certmig::BackupToRegistry(c, false, false, rename)
+                    : certmig::BackupToCryptoProStore(c, false, false, rename);
             OutLine(r.message);
             OutLine(L"Журнал: " + certmig::JournalPath());
             return r.ok ? 0 : 3;

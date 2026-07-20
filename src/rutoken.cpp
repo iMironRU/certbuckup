@@ -6,12 +6,19 @@
 namespace certmig {
 
 const wchar_t* ContainerFileName(int offset) {
+    // ВНИМАНИЕ: физический файл folderId+1 - это masks.key, а +2 - primary.key
+    // (и так же +4=masks2, +5=primary2). Раньше здесь было наоборот, и копия
+    // не проходила проверку ключа (0x8009000A). Проверено побайтово против
+    // рабочей копии, снятой утилитой Контура с того же контейнера: статичные
+    // primary2/masks2 совпадают ТОЛЬКО при такой (обменянной) раскладке.
+    // Роль определяется структурой: 60-байтный "30 36 04 20 .." = masks,
+    // 70-байтный "30 22 04 20 .." = primary.
     switch (offset) {
-        case 1: return L"primary.key";
-        case 2: return L"masks.key";
+        case 1: return L"masks.key";
+        case 2: return L"primary.key";
         case 3: return L"header.key";
-        case 4: return L"primary2.key";
-        case 5: return L"masks2.key";
+        case 4: return L"masks2.key";
+        case 5: return L"primary2.key";
         case 6: return L"name.key";
         default: return L"";
     }

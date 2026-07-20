@@ -46,15 +46,23 @@ std::wstring Clean(const std::wstring& s) {
     return out;
 }
 
+// Журнал по умолчанию выключен: без ключа --log файл рядом с exe не создаётся.
+bool g_enabled = false;
+
 }  // namespace
 
+void SetJournalEnabled(bool on) { g_enabled = on; }
+
+bool JournalEnabled() { return g_enabled; }
+
 std::wstring JournalPath() {
-    return ExeDir() + L"\\cert-migrator-journal.log";
+    return ExeDir() + L"\\CertBuckUp-journal.log";
 }
 
 void JournalOp(const std::wstring& op, const std::wstring& subject,
                const std::wstring& thumb, const std::wstring& from,
                const std::wstring& to, const std::wstring& result) {
+    if (!g_enabled) return;  // без --log ничего не пишем и файл не создаём
     std::wstring line = TimeStamp() + L"\t" + Clean(op) + L"\t" +
                         Clean(subject) + L"\t" + Clean(thumb) + L"\t" +
                         Clean(from) + L" -> " + Clean(to) + L"\t" +

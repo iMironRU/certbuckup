@@ -8,6 +8,7 @@
 
 #include "backup.h"
 #include "capabilities.h"
+#include "journal.h"
 #include "resolver.h"
 
 namespace certmig {
@@ -91,7 +92,7 @@ const WORD A_WARNTAG = Attr(C_WHITE, C_WARN); // "битая копия": бел
 int W = 104, H = 32;
 
 // Версия и репозиторий - показываются в футере и на экране окружения.
-const wchar_t* kVersion = L"0.4.2";
+const wchar_t* kVersion = L"0.4.3";
 const wchar_t* kRepoUrl = L"github.com/iMironRU/certbuckup";        // показ
 const wchar_t* kRepoUrlFull = L"https://github.com/iMironRU/certbuckup";  // ссылка
 
@@ -509,7 +510,11 @@ void RenderResult(Canvas& cv, const State& s) {
     // Таблица журнала за сеанс.
     const int cT = 4, cOrg = 16, cInn = 42, cDest = 60;
     int hy = 7;
-    cv.Text(cT, hy, L"Журнал операций за сеанс", A_ACC);
+    cv.Text(cT, hy,
+            JournalEnabled()
+                ? L"Журнал операций за сеанс  ·  пишется в файл рядом с программой"
+                : L"Журнал операций за сеанс  (файл не ведётся, ключ --log)",
+            A_ACC);
     hy += 1;
     cv.Text(cT, hy, L"Время", A_DIM);
     cv.Text(cOrg, hy, L"Организация", A_DIM);

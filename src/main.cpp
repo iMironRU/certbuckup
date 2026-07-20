@@ -101,7 +101,8 @@ int BackupContainer(const certmig::ContainerInfo& c,
         OutLine(L"    " + f.name + L"  (" + std::to_wstring(f.data.size()) +
                 L" байт)");
     OutLine(L"Индекс: " + targetBase + L"\\index.csv");
-    OutLine(L"Журнал: " + certmig::JournalPath());
+    if (certmig::JournalEnabled())
+        OutLine(L"Журнал: " + certmig::JournalPath());
     return 0;
 }
 
@@ -149,6 +150,8 @@ int main(int argc, char** argv) {
             OutLine(L"  --scan      диагностика rtComLite (папки-контейнеры)");
             OutLine(L"  --backup N  скопировать контейнер №N в DIR\\ИНН.ММГГ");
             OutLine(L"  --to DIR    цель копирования (по умолчанию: cert рядом с exe)");
+            OutLine(L"  --log       вести журнал операций рядом с exe");
+            OutLine(L"              (по умолчанию журнал не ведётся и файл не создаётся)");
             return 0;
         }
         if (a == "-v" || a == "--verbose") verbose = true;
@@ -170,6 +173,8 @@ int main(int argc, char** argv) {
             renameOne = true;
         }
         if (a == "--norename") noRename = true;
+        // Журнал по умолчанию выключен: на чужой машине не оставляем след.
+        if (a == "--log") certmig::SetJournalEnabled(true);
         if (a == "--repair" && i + 1 < argc) {
             backupIndex = atoi(argv[++i]);
             repairOne = true;
@@ -295,7 +300,8 @@ int main(int argc, char** argv) {
                     ? certmig::BackupToRegistry(c, false, false, rename)
                     : certmig::BackupToCryptoProStore(c, false, false, rename);
             OutLine(r.message);
-            OutLine(L"Журнал: " + certmig::JournalPath());
+            if (certmig::JournalEnabled())
+                OutLine(L"Журнал: " + certmig::JournalPath());
             return r.ok ? 0 : 3;
         }
         return BackupContainer(c, targetBase);

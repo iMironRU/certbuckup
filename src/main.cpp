@@ -119,6 +119,11 @@ std::wstring ExportableName(certmig::Exportable e, DWORD err) {
 
 int main(int argc, char** argv) {
     SetConsoleOutputCP(CP_UTF8);
+    // Не показывать системный диалог «Диск отсутствует» (0xc0000013) при опросе
+    // пустых сменных дисков (картридер/дисковод без носителя). Иначе
+    // перечисление FAT12-контейнеров упирается в модалку. Действует на весь
+    // процесс, включая фоновый поток скана и обращения CSP/CryptoAPI к дискам.
+    SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOOPENFILEERRORBOX);
 
     bool verbose = false;
     bool envOnly = false;

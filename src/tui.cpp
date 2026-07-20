@@ -73,7 +73,7 @@ const WORD A_WARNTAG = Attr(C_BG, C_WARN);    // плашка "битая коп
 int W = 104, H = 32;
 
 // Версия и репозиторий - показываются в футере и на экране окружения.
-const wchar_t* kVersion = L"0.2.1";
+const wchar_t* kVersion = L"0.2.2";
 const wchar_t* kRepoUrl = L"github.com/iMironRU/certbuckup";        // показ
 const wchar_t* kRepoUrlFull = L"https://github.com/iMironRU/certbuckup";  // ссылка
 

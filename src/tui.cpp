@@ -73,7 +73,7 @@ const WORD A_WARNTAG = Attr(C_BG, C_WARN);    // плашка "битая коп
 int W = 104, H = 32;
 
 // Версия и репозиторий - показываются в футере и на экране окружения.
-const wchar_t* kVersion = L"0.2.2";
+const wchar_t* kVersion = L"0.3.0";
 const wchar_t* kRepoUrl = L"github.com/iMironRU/certbuckup";        // показ
 const wchar_t* kRepoUrlFull = L"https://github.com/iMironRU/certbuckup";  // ссылка
 
@@ -207,7 +207,7 @@ std::wstring LegalInn(const ContainerInfo& c) {
 enum class Screen { Tokens, Certs };
 enum class Modal { None, Dest, Blocked, Info, Exit, Result, Overwrite };
 
-enum DestKind { DEST_FOLDER, DEST_REGISTRY, DEST_CPSTORE, DEST_TODO };
+enum DestKind { DEST_FOLDER, DEST_REGISTRY, DEST_CPSTORE, DEST_REMOVABLE, DEST_TODO };
 struct DestOpt {
     std::wstring label;
     std::wstring path;      // куда (для папок)
@@ -240,13 +240,25 @@ struct State {
     int resultKind = 0;       // 0 ok, 1 пропуск, 2 ошибка
     std::vector<LogRow> log;
 
-    std::vector<DestOpt> dests = {
-        {L"Диск D:\\", L"D:\\Сертификаты", DEST_FOLDER},
-        {L"Реестр Windows", L"", DEST_REGISTRY},
-        {L"Папка рядом с приложением", DefaultBackupDir(), DEST_FOLDER},
-        {L"Папка КриптоПро", CryptoProStoreDir(), DEST_CPSTORE},
-    };
+    std::vector<DestOpt> dests;  // строится в RunTui: съёмные диски + реестр + папки
+    int defaultDest = 0;         // индекс варианта по умолчанию (F5/двойной клик)
 };
+
+// Список назначений: сначала все съёмные диски (флешки) с вставленным
+// носителем, затем реестр и папки. Диск-корень даёт рабочий контейнер прямо
+// на флешке + архив в папку Сертификаты (см. BackupToRemovable).
+std::vector<DestOpt> BuildDests() {
+    std::vector<DestOpt> d;
+    for (const std::wstring& drv : RemovableDrives()) {
+        std::wstring letter = drv.substr(0, 2);  // "E:"
+        d.push_back({L"Съёмный диск " + letter + L"  (контейнер + архив)", drv,
+                     DEST_REMOVABLE});
+    }
+    d.push_back({L"Реестр Windows", L"", DEST_REGISTRY});
+    d.push_back({L"Папка рядом с приложением", DefaultBackupDir(), DEST_FOLDER});
+    d.push_back({L"Папка КриптоПро", CryptoProStoreDir(), DEST_CPSTORE});
+    return d;
+}
 
 // --- Отрисовка экранов ------------------------------------------------------
 void DrawFooter(Canvas& cv, const std::wstring& keys) {
@@ -355,7 +367,8 @@ void RenderDest(Canvas& cv, const State& s) {
     // Широкий диалог, чтобы путь помещался целиком; каждый вариант - две
     // строки (название + полный путь), путь не обрезается.
     int w = W - 8 > 96 ? 96 : W - 8;
-    int h = 20, x = (W - w) / 2, y = (H - h) / 2;
+    int nd = static_cast<int>(s.dests.size());
+    int h = 8 + 2 * nd, x = (W - w) / 2, y = (H - h) / 2;
     DrawDialog(cv, x, y, w, h, L"Куда скопировать контейнер");
     cv.Text(x + 3, y + 2, OrgName(c) + L"  ·  ИНН " + LegalInn(c), A_SURFACC,
             w - 6);
@@ -370,7 +383,9 @@ void RenderDest(Canvas& cv, const State& s) {
         if (d.kind == DEST_TODO) line += L"  (в разработке)";
         cv.Text(x + 4, ry, line, sel ? A_SURFACC : A_SURF, w - 8);
         std::wstring path =
-            d.kind == DEST_FOLDER || d.kind == DEST_CPSTORE ? d.path
+            d.kind == DEST_REMOVABLE
+                ? d.path + L"<контейнер>  +  " + d.path + L"Сертификаты\\"
+            : d.kind == DEST_FOLDER || d.kind == DEST_CPSTORE ? d.path
             : d.kind == DEST_REGISTRY
                 ? L"HKLM\\...\\Crypto Pro\\...\\Keys (нужен админ)"
                 : L"—";
@@ -766,9 +781,10 @@ void DoCopy(State& s, bool overwrite) {
         // Снятие флага - только если чекбокс доступен (CSP 4.x) и отмечен.
         bool clr = s.flagClear && s.cspMajor > 0 && s.cspMajor <= 4;
         BackupResult br =
-            d.kind == DEST_REGISTRY  ? BackupToRegistry(c, overwrite, clr)
-            : d.kind == DEST_CPSTORE ? BackupToCryptoProStore(c, overwrite, clr)
-                                     : BackupToFolder(c, d.path, overwrite, clr);
+            d.kind == DEST_REGISTRY    ? BackupToRegistry(c, overwrite, clr)
+            : d.kind == DEST_CPSTORE   ? BackupToCryptoProStore(c, overwrite, clr)
+            : d.kind == DEST_REMOVABLE ? BackupToRemovable(c, d.path, overwrite, clr)
+                                       : BackupToFolder(c, d.path, overwrite, clr);
         s.resultKind = br.ok ? 0 : br.skipped ? 1 : 2;
         s.resultMsg = OrgName(c) + L" · ИНН " + LegalInn(c) + L"  —  " + br.message;
         row.ok = br.ok;
@@ -792,6 +808,8 @@ void RequestCopy(State& s) {
         exists = RegistryContainerExists(c);
     else if (d.kind == DEST_CPSTORE)
         exists = CryptoProStoreExists(c);
+    else if (d.kind == DEST_REMOVABLE)
+        exists = RemovableContainerExists(c, d.path);
     if (exists) {
         s.overwriteCursor = 1;  // по умолчанию - отмена (безопаснее)
         s.modal = Modal::Overwrite;
@@ -859,8 +877,9 @@ void HandleClick(State& s, int mx, int my, bool dbl, bool& running) {
     }
     if (s.modal == Modal::Dest) {
         const ContainerInfo& c = s.items[s.toks[s.selTok].certIdx[s.certCursor]];
-        int w = W - 8 > 96 ? 96 : W - 8, h = 20, x = (W - w) / 2, y = (H - h) / 2;
         int nd = static_cast<int>(s.dests.size());
+        int w = W - 8 > 96 ? 96 : W - 8, h = 8 + 2 * nd, x = (W - w) / 2,
+            y = (H - h) / 2;
         for (int i = 0; i < nd; ++i)
             if ((my == y + 4 + 2 * i || my == y + 4 + 2 * i + 1) && mx >= x &&
                 mx < x + w) {
@@ -869,7 +888,7 @@ void HandleClick(State& s, int mx, int my, bool dbl, bool& running) {
                 return;
             }
         if (c.exportable == Exportable::No && s.cspMajor > 0 &&
-            s.cspMajor <= 4 && my == y + 13 && mx >= x && mx < x + w) {
+            s.cspMajor <= 4 && my == y + 5 + 2 * nd && mx >= x && mx < x + w) {
             s.flagClear = !s.flagClear;
         }
         return;
@@ -893,7 +912,7 @@ void HandleClick(State& s, int mx, int my, bool dbl, bool& running) {
         s.certCursor = k;
         if (dbl) {  // двойной клик по сертификату - копировать
             if (t.hardware) s.modal = Modal::Blocked;
-            else { s.modal = Modal::Dest; s.destCursor = 2; s.flagClear = false; }
+            else { s.modal = Modal::Dest; s.destCursor = s.defaultDest; s.flagClear = false; }
         }
     }
 }
@@ -921,10 +940,35 @@ int RunTui() {
                 return c.state == CapState::Missing;
         return false;
     };
-    while (rtMissing()) {
-        RenderEnvironment(cv, env,
-                          L"rtComLite не установлен.  [D] скачать и установить "
-                          L"·  [Enter] продолжить без него  ·  [F10] выход");
+    auto svcDown = [&]() {
+        for (const Capability& c : env.caps)
+            if (c.name.find(L"смарт-карт") != std::wstring::npos)
+                return c.state != CapState::Present;
+        return false;
+    };
+    // Ждём оператора и предлагаем починить, пока не хватает ключевого:
+    // компонента Рутокена (rtComLite) или запущенной службы смарт-карт.
+    // Небольшая помощь после действия: перечитать env и подождать [Enter].
+    auto afterAction = [&](const std::wstring& done) {
+        INPUT_RECORD rc;
+        DWORD n = 0;
+        RenderEnvironment(cv, env, done + L"   [Enter] продолжить");
+        con.Present(cv);
+        for (;;) {
+            if (!ReadConsoleInputW(con.in, &rc, 1, &n) || n == 0) continue;
+            if (rc.EventType != KEY_EVENT || !rc.Event.KeyEvent.bKeyDown) continue;
+            WORD k = rc.Event.KeyEvent.wVirtualKeyCode;
+            if (k == VK_F10) { con.Restore(); ExitProcess(0); }
+            if (k == VK_RETURN) break;
+        }
+        env = ProbeEnvironment();
+    };
+    while (rtMissing() || svcDown()) {
+        std::wstring hint;
+        if (rtMissing()) hint += L"[D] установить rtComLite   ";
+        if (svcDown()) hint += L"[S] запустить службу смарт-карт   ";
+        hint += L"[Enter] продолжить   [F10] выход";
+        RenderEnvironment(cv, env, hint);
         con.Present(cv);
         INPUT_RECORD rec;
         DWORD rd = 0;
@@ -933,24 +977,19 @@ int RunTui() {
         WORD vk = rec.Event.KeyEvent.wVirtualKeyCode;
         if (vk == VK_F10) { con.Restore(); return 0; }
         if (vk == VK_RETURN) break;
-        if (vk == 'D') {
+        if (vk == 'D' && rtMissing()) {
             std::wstring st;
-            RenderEnvironment(cv, env, L"Скачиваю и запускаю установщик…");
+            RenderEnvironment(cv, env, L"Скачиваю и запускаю установщик rtComLite…");
             con.Present(cv);
             InstallRtComLite(&st);
-            RenderEnvironment(cv, env,
-                              st + L"   [Enter] продолжить · [F10] выход");
+            afterAction(st);
+        }
+        if (vk == 'S' && svcDown()) {
+            std::wstring st;
+            RenderEnvironment(cv, env, L"Запускаю службу смарт-карт…");
             con.Present(cv);
-            // Ждём реакции; повторная проба окружения после установки.
-            for (;;) {
-                if (!ReadConsoleInputW(con.in, &rec, 1, &rd) || rd == 0) continue;
-                if (rec.EventType != KEY_EVENT || !rec.Event.KeyEvent.bKeyDown)
-                    continue;
-                WORD k = rec.Event.KeyEvent.wVirtualKeyCode;
-                if (k == VK_F10) { con.Restore(); return 0; }
-                if (k == VK_RETURN) break;
-            }
-            env = ProbeEnvironment();  // вдруг уже установили
+            StartSmartCardService(&st);
+            afterAction(st);
         }
     }
 
@@ -988,6 +1027,19 @@ int RunTui() {
         s.items = std::move(job.items);
     }
     s.toks = BuildTokens(s.items);
+    // Назначения копирования: съёмные диски (флешки) + реестр + папки.
+    s.dests = BuildDests();
+    bool haveUsb = false;
+    for (int i = 0; i < static_cast<int>(s.dests.size()); ++i)
+        if (s.dests[i].kind == DEST_REMOVABLE) {
+            s.defaultDest = i;
+            haveUsb = true;
+            break;
+        }
+    if (!haveUsb)
+        for (int i = 0; i < static_cast<int>(s.dests.size()); ++i)
+            if (s.dests[i].kind == DEST_FOLDER) { s.defaultDest = i; break; }
+    s.destCursor = s.defaultDest;
     s.cspMajor = _wtoi(DetectCsp().version.c_str());  // "5.0" -> 5
     // Пометить контейнеры с GUID-именем (на носителях, где умеем переименовать).
     for (const ContainerInfo& it : s.items)
@@ -1120,7 +1172,7 @@ int RunTui() {
             else if (vk == VK_DOWN) s.certCursor = (s.certCursor + 1) % n;
             else if (vk == VK_F5) {
                 if (t.hardware) s.modal = Modal::Blocked;
-                else { s.modal = Modal::Dest; s.destCursor = 2; s.flagClear = false; }
+                else { s.modal = Modal::Dest; s.destCursor = s.defaultDest; s.flagClear = false; }
             }
             else if (vk == VK_F6 && n > 0) {
                 // Переименовать контейнер на месте (реестр/папка КриптоПро).
@@ -1211,6 +1263,7 @@ int RunTuiDump() {
     State s;
     s.items = EnumerateContainers();
     s.toks = BuildTokens(s.items);
+    s.dests = BuildDests();
     for (const ContainerInfo& it : s.items)
         s.copyLayout.push_back(static_cast<int>(DetectCopyLayout(it)));
     Canvas cv;

@@ -114,4 +114,23 @@ bool CryptoProStoreExists(const ContainerInfo& c);
 // Путь к папке cert рядом с exe - цель по умолчанию.
 std::wstring DefaultBackupDir();
 
+// Корни всех съёмных дисков в системе (напр. {"E:\\", "F:\\"}). Пустые/не
+// готовые устройства пропускаются. Для предложения флешек в диалоге копирования.
+std::vector<std::wstring> RemovableDrives();
+
+// Копирует контейнер на съёмный диск сразу двумя способами:
+//   1) рабочий FAT12-контейнер в корне диска  <диск>\<8.3-имя>\  (КриптоПро
+//      видит его прямо с флешки);
+//   2) архивную копию в  <диск>\Сертификаты\<ИНН.ММГГ>\<8.3-имя>\  + index.csv.
+// driveRoot - корень диска ("E:\\"). Источник - файловый контейнер с токена.
+BackupResult BackupToRemovable(const ContainerInfo& c,
+                               const std::wstring& driveRoot,
+                               bool overwrite = false,
+                               bool clearExportFlag = false,
+                               bool renameReadable = true);
+
+// Есть ли уже рабочий контейнер этой копии в корне диска (для предупреждения).
+bool RemovableContainerExists(const ContainerInfo& c,
+                              const std::wstring& driveRoot);
+
 }  // namespace certmig

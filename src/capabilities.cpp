@@ -246,4 +246,55 @@ Environment ProbeEnvironment() {
     return env;
 }
 
+bool StartSmartCardService(std::wstring* status) {
+    SC_HANDLE scm = OpenSCManagerW(nullptr, nullptr, SC_MANAGER_CONNECT);
+    if (!scm) {
+        *status = L"Не удалось подключиться к диспетчеру служб.";
+        return false;
+    }
+    SC_HANDLE svc = OpenServiceW(scm, L"SCardSvr",
+                                 SERVICE_START | SERVICE_QUERY_STATUS |
+                                     SERVICE_CHANGE_CONFIG);
+    if (!svc) {
+        DWORD e = GetLastError();
+        CloseServiceHandle(scm);
+        *status = (e == ERROR_ACCESS_DENIED)
+                      ? L"Нет прав — запустите программу от администратора."
+                      : L"Служба SCardSvr не найдена.";
+        return false;
+    }
+    // Если служба отключена — вернуть в «запуск вручную», иначе StartService
+    // отказом (ERROR_SERVICE_DISABLED). Требует прав администратора.
+    ChangeServiceConfigW(svc, SERVICE_NO_CHANGE, SERVICE_DEMAND_START,
+                         SERVICE_NO_CHANGE, nullptr, nullptr, nullptr, nullptr,
+                         nullptr, nullptr, nullptr);
+
+    bool ok = false;
+    if (StartServiceW(svc, 0, nullptr)) {
+        ok = true;
+    } else {
+        DWORD e = GetLastError();
+        if (e == ERROR_SERVICE_ALREADY_RUNNING) {
+            ok = true;
+        } else if (e == ERROR_ACCESS_DENIED) {
+            *status = L"Нет прав — запустите программу от администратора.";
+        } else {
+            *status = L"Не удалось запустить службу (код " +
+                      std::to_wstring(e) + L").";
+        }
+    }
+    if (ok) {
+        SERVICE_STATUS ss;
+        for (int i = 0; i < 20; ++i) {  // ждём перехода в running (~3 с)
+            if (!QueryServiceStatus(svc, &ss)) break;
+            if (ss.dwCurrentState == SERVICE_RUNNING) break;
+            Sleep(150);
+        }
+        *status = L"Служба смарт-карт запущена.";
+    }
+    CloseServiceHandle(svc);
+    CloseServiceHandle(scm);
+    return ok;
+}
+
 }  // namespace certmig

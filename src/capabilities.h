@@ -54,4 +54,9 @@ Environment ProbeEnvironment();
 // Возвращает true, если установщик запущен.
 bool InstallRtComLite(std::wstring* status);
 
+// Запускает службу смарт-карт (SCardSvr): при необходимости переводит из
+// «отключена» в «вручную» и стартует. Без неё токены не видны никому. Требует
+// прав администратора. status - краткий итог для показа. true, если запущена.
+bool StartSmartCardService(std::wstring* status);
+
 }  // namespace certmig

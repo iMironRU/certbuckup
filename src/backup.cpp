@@ -492,6 +492,137 @@ BackupResult BackupToCryptoProStore(const ContainerInfo& c, bool overwrite,
     return r;
 }
 
+// --- Копирование на съёмные диски (флешки) ----------------------------------
+
+namespace {
+
+// Общая часть: прочитать 6 файлов контейнера c с токена в out->files.
+// false + out->message при отказе (аппаратный/не-файловый/токен не найден).
+bool ReadTokenContainer(const ContainerInfo& c, BackupResult* out) {
+    if (c.medium == KeyMedium::HardWare) {
+        out->message = L"Контейнер аппаратный (ключ в чипе) — копировать нечего.";
+        return false;
+    }
+    if (c.medium != KeyMedium::FileToken || c.folderId < 0) {
+        out->message = L"Копируется только файловый контейнер с токена.";
+        return false;
+    }
+    out->reader = FindReaderForFolder(c.folderId);
+    if (out->reader.empty()) {
+        out->message = L"Не найден токен с контейнером — переподключите носитель.";
+        return false;
+    }
+    std::wstring err;
+    if (!ReadContainer(out->reader, c.folderId, &out->files, &err)) {
+        out->message = L"Ошибка чтения контейнера: " + err;
+        return false;
+    }
+    return true;
+}
+
+}  // namespace
+
+std::vector<std::wstring> RemovableDrives() {
+    std::vector<std::wstring> out;
+    wchar_t buf[256];
+    DWORD n = GetLogicalDriveStringsW(255, buf);
+    if (n == 0 || n > 255) return out;
+    for (wchar_t* p = buf; *p; p += wcslen(p) + 1) {
+        std::wstring root = p;  // напр. "E:\\"
+        if (GetDriveTypeW(root.c_str()) != DRIVE_REMOVABLE) continue;
+        // Только с вставленным носителем (SetErrorMode гасит диалог пустого).
+        ULARGE_INTEGER freeb;
+        if (GetDiskFreeSpaceExW(root.c_str(), &freeb, nullptr, nullptr))
+            out.push_back(root);
+    }
+    return out;
+}
+
+bool RemovableContainerExists(const ContainerInfo& c,
+                              const std::wstring& driveRoot) {
+    std::wstring root = driveRoot;
+    if (!root.empty() && root.back() != L'\\') root += L'\\';
+    return GetFileAttributesW((root + Name83(c)).c_str()) !=
+           INVALID_FILE_ATTRIBUTES;
+}
+
+BackupResult BackupToRemovable(const ContainerInfo& c,
+                               const std::wstring& driveRoot, bool overwrite,
+                               bool clearExportFlag, bool renameReadable) {
+    BackupResult r;
+    std::wstring subj = c.subjectCN + L" / " + c.Inn();
+
+    if (!ReadTokenContainer(c, &r)) {
+        JournalOp(L"backup-usb", subj, c.thumbprint, c.name, driveRoot,
+                  L"отказ: " + r.message);
+        return r;
+    }
+    if (clearExportFlag) ClearExportFlagInFiles(&r.files);
+    if (renameReadable) SetFriendlyName(&r.files, AutoFriendlyName(c));
+
+    std::wstring root = driveRoot;
+    if (!root.empty() && root.back() != L'\\') root += L'\\';
+    r.name83 = Name83(c);
+
+    // 1) Рабочий FAT12-контейнер в корне диска: <диск>\<8.3-имя>\.
+    std::wstring contDir = root + r.name83;
+    if (GetFileAttributesW(contDir.c_str()) != INVALID_FILE_ATTRIBUTES) {
+        if (!overwrite) {
+            r.skipped = true;
+            r.message = L"Контейнер уже на диске: " + contDir;
+            JournalOp(L"backup-usb", subj, c.thumbprint, r.reader, contDir,
+                      L"пропуск: уже существует");
+            return r;
+        }
+        RemoveDirRecursive(contDir);
+    }
+    if (!EnsureDir(contDir)) {
+        r.message = L"Не удалось создать папку на диске: " + contDir +
+                    L" (диск защищён от записи?)";
+        JournalOp(L"backup-usb", subj, c.thumbprint, r.reader, contDir,
+                  L"ошибка: нет доступа к диску");
+        return r;
+    }
+    for (const ContainerFile& f : r.files) {
+        if (!WriteBytes(contDir + L"\\" + f.name, f.data)) {
+            r.message = L"Не удалось записать файл на диск: " + f.name;
+            JournalOp(L"backup-usb", subj, c.thumbprint, r.reader, contDir,
+                      L"ошибка записи: " + f.name);
+            return r;
+        }
+    }
+
+    // 2) Архивная копия: <диск>\Сертификаты\<ИНН.ММГГ>\<8.3-имя>\ + index.csv.
+    std::wstring archBase = root + L"Сертификаты";
+    std::wstring human = FolderInn(c) + L"." + MMYY(c.notAfter);
+    std::wstring wrapper = archBase + L"\\" + human;
+    std::wstring archDir = wrapper + L"\\" + r.name83;
+    bool archOk = false;
+    if (EnsureDir(archBase) && EnsureDir(wrapper)) {
+        if (GetFileAttributesW(archDir.c_str()) != INVALID_FILE_ATTRIBUTES)
+            RemoveDirRecursive(archDir);
+        if (EnsureDir(archDir)) {
+            archOk = true;
+            for (const ContainerFile& f : r.files)
+                if (!WriteBytes(archDir + L"\\" + f.name, f.data)) {
+                    archOk = false;
+                    break;
+                }
+            if (archOk) AppendIndex(archBase, c, human, r.name83);
+        }
+    }
+
+    r.dest = contDir;
+    r.human = human;
+    JournalOp(L"backup-usb", subj, c.thumbprint, r.reader, contDir,
+              archOk ? L"OK (корень + Сертификаты)" : L"OK (корень; архив не удался)");
+    r.ok = true;
+    r.message = L"Скопировано на диск: " + contDir +
+                (archOk ? L"  (+ архив в " + archBase + L")"
+                        : L"  (архив в Сертификаты не удался)");
+    return r;
+}
+
 // --- Переименование дружественного имени контейнера на месте ---------------
 
 namespace {

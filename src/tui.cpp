@@ -35,8 +35,26 @@ COLORREF Rgb(int r, int g, int b) {
 // Таблица палитры Nocturne по индексам. Для VT-режима (Windows Terminal
 // игнорирует палитру консоли, поэтому цвет задаём truecolor-escape'ами).
 COLORREF g_pal[16];
+
+// Высококонтрастная палитра: тёмный «Nocturne» разваливается в нечитаемый
+// синий на RDP и в слабых консолях (24-битный цвет квантуется). Безопасный
+// режим берёт «угловые» цвета (чёрный/белый/яркие), которые не портятся.
+bool g_safe = false;
+
 void InitPalette() {
     for (int i = 0; i < 16; ++i) g_pal[i] = Rgb(0x80, 0x80, 0x80);
+    if (g_safe) {
+        g_pal[C_BG] = Rgb(0x00, 0x00, 0x00);        // чёрный фон
+        g_pal[C_SURFACE] = Rgb(0x00, 0x00, 0x80);   // тёмно-синие диалоги
+        g_pal[C_NEUTRAL] = Rgb(0x30, 0x30, 0x30);
+        g_pal[C_WARN] = Rgb(0xff, 0x00, 0x00);       // ярко-красный
+        g_pal[C_ACCENT] = Rgb(0x1a, 0x8c, 0xff);     // яркий синий (выделение)
+        g_pal[C_DIM] = Rgb(0xc0, 0xc0, 0xc0);        // светло-серый
+        g_pal[C_TEXT] = Rgb(0xff, 0xff, 0xff);       // белый текст
+        g_pal[C_ACCENTHI] = Rgb(0x8c, 0xe8, 0xff);   // светло-голубой (плашки)
+        g_pal[C_WHITE] = Rgb(0xff, 0xff, 0xff);
+        return;
+    }
     g_pal[C_BG] = Rgb(0x16, 0x18, 0x26);
     g_pal[C_SURFACE] = Rgb(0x23, 0x25, 0x32);
     g_pal[C_NEUTRAL] = Rgb(0x29, 0x2b, 0x31);
@@ -64,16 +82,16 @@ const WORD A_SEL = Attr(C_WHITE, C_ACCENT);
 const WORD A_SURF = Attr(C_TEXT, C_SURFACE);
 const WORD A_SURFDIM = Attr(C_DIM, C_SURFACE);
 const WORD A_SURFACC = Attr(C_ACCENTHI, C_SURFACE);
-const WORD A_TAG = Attr(C_BG, C_ACCENT);
+const WORD A_TAG = Attr(C_BG, C_ACCENTHI);    // тёмный текст на светлой плашке
 const WORD A_WARN = Attr(C_WARN, C_BG);       // текст-предупреждение
-const WORD A_WARNTAG = Attr(C_BG, C_WARN);    // плашка "битая копия"
+const WORD A_WARNTAG = Attr(C_WHITE, C_WARN); // "битая копия": белым по красному
 
 // Размер холста. Не константы: подстраиваются под фактическое окно консоли
 // в Console::Init. По умолчанию - на случай дампа без консоли.
 int W = 104, H = 32;
 
 // Версия и репозиторий - показываются в футере и на экране окружения.
-const wchar_t* kVersion = L"0.4.1";
+const wchar_t* kVersion = L"0.4.2";
 const wchar_t* kRepoUrl = L"github.com/iMironRU/certbuckup";        // показ
 const wchar_t* kRepoUrlFull = L"https://github.com/iMironRU/certbuckup";  // ссылка
 
@@ -309,7 +327,7 @@ void RenderTokens(Canvas& cv, const State& s) {
         y += 3;
     }
     DrawFooter(cv,
-               L"↑↓/колесо   Enter или клик — открыть   F3 инфо   F10 выход",
+               L"↑↓/колесо   Enter — открыть   F3 инфо   F2 цвета   F10 выход",
                &s.update);
 }
 
@@ -603,7 +621,36 @@ struct Console {
         WriteConsoleW(out, s.c_str(), static_cast<DWORD>(s.size()), &w, nullptr);
     }
 
+    // Пере-применить палитру консоли (для легаси-режима) после смены g_safe.
+    // В VT-режиме цвет берётся из g_pal при выводе — палитра консоли не нужна.
+    void ReapplyColors() {
+        InitPalette();
+        if (vt || out == INVALID_HANDLE_VALUE) return;
+        CONSOLE_SCREEN_BUFFER_INFOEX info;
+        info.cbSize = sizeof(info);
+        if (!GetConsoleScreenBufferInfoEx(out, &info)) return;
+        info.ColorTable[C_BG] = g_pal[C_BG];
+        info.ColorTable[C_SURFACE] = g_pal[C_SURFACE];
+        info.ColorTable[C_NEUTRAL] = g_pal[C_NEUTRAL];
+        info.ColorTable[C_WARN] = g_pal[C_WARN];
+        info.ColorTable[C_ACCENT] = g_pal[C_ACCENT];
+        info.ColorTable[C_ACCENTHI] = g_pal[C_ACCENTHI];
+        info.ColorTable[C_DIM] = g_pal[C_DIM];
+        info.ColorTable[C_TEXT] = g_pal[C_TEXT];
+        info.ColorTable[C_WHITE] = g_pal[C_WHITE];
+        info.srWindow.Right += 1;  // квирк SetConsoleScreenBufferInfoEx
+        info.srWindow.Bottom += 1;
+        SetConsoleScreenBufferInfoEx(out, &info);
+    }
+
     void Init() {
+        // Безопасная (высококонтрастная) палитра: авто в RDP-сессии или по
+        // переменной окружения CERTBUCKUP_SAFECOLORS. Тёмная тема на RDP и
+        // слабых консолях разваливается в нечитаемый синий.
+        if (GetSystemMetrics(SM_REMOTESESSION) != 0) g_safe = true;
+        wchar_t envbuf[8];
+        if (GetEnvironmentVariableW(L"CERTBUCKUP_SAFECOLORS", envbuf, 8) > 0)
+            g_safe = true;
         InitPalette();
         out = GetStdHandle(STD_OUTPUT_HANDLE);
         in = GetStdHandle(STD_INPUT_HANDLE);
@@ -1196,6 +1243,14 @@ int RunTui() {
         // и запуска службы). Если уже админ - ничего не делаем.
         if (vk == VK_F9) {
             if (!IsProcessElevated() && RelaunchAsAdmin()) running = false;
+            continue;
+        }
+        // F2 - переключить высококонтрастную палитру (если тёмная тема
+        // нечитаема, напр. по RDP). В RDP включается сама.
+        if (vk == VK_F2) {
+            g_safe = !g_safe;
+            con.ReapplyColors();
+            cv = Canvas();  // перерисовать весь кадр новым фоном
             continue;
         }
 

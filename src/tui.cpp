@@ -73,7 +73,7 @@ const WORD A_WARNTAG = Attr(C_BG, C_WARN);    // плашка "битая коп
 int W = 104, H = 32;
 
 // Версия и репозиторий - показываются в футере и на экране окружения.
-const wchar_t* kVersion = L"0.3.0";
+const wchar_t* kVersion = L"0.4.0";
 const wchar_t* kRepoUrl = L"github.com/iMironRU/certbuckup";        // показ
 const wchar_t* kRepoUrlFull = L"https://github.com/iMironRU/certbuckup";  // ссылка
 
@@ -224,6 +224,7 @@ struct State {
     std::vector<Tok> toks;
     std::vector<bool> guidName;  // у контейнера сейчас GUID-образное имя
     std::vector<int> copyLayout;  // раскладка копии: см. CopyLayout (0..3)
+    UpdateInfo update;            // есть ли новая версия на GitHub
 
     Screen screen = Screen::Tokens;
     Modal modal = Modal::None;
@@ -261,13 +262,21 @@ std::vector<DestOpt> BuildDests() {
 }
 
 // --- Отрисовка экранов ------------------------------------------------------
-void DrawFooter(Canvas& cv, const std::wstring& keys) {
+void DrawFooter(Canvas& cv, const std::wstring& keys,
+                const UpdateInfo* upd = nullptr) {
     cv.Fill(0, H - 1, W, 1, A_DIM);
     cv.Text(2, H - 1, keys, A_DIM);
     // Версия справа - кликабельная ссылка на репозиторий.
     std::wstring ver = std::wstring(L"CertBuckUp ") + kVersion;
-    cv.LinkText(W - static_cast<int>(ver.size()) - 2, H - 1, ver, A_DIM,
-                kRepoUrlFull);
+    int vx = W - static_cast<int>(ver.size()) - 2;
+    cv.LinkText(vx, H - 1, ver, A_DIM, kRepoUrlFull);
+    // Если на GitHub есть версия новее - кликабельная плашка слева от версии.
+    if (upd && upd->newer && !upd->latest.empty()) {
+        std::wstring note = L"↑ обновление " + upd->latest + L" ";
+        int nx = vx - static_cast<int>(note.size()) - 2;
+        if (nx > static_cast<int>(keys.size()) + 4)
+            cv.LinkText(nx, H - 1, note, A_WARN, upd->url);
+    }
 }
 
 void DrawWindow(Canvas& cv, const std::wstring& crumb, const std::wstring& right) {
@@ -300,7 +309,8 @@ void RenderTokens(Canvas& cv, const State& s) {
         y += 3;
     }
     DrawFooter(cv,
-               L"↑↓/колесо   Enter или клик — открыть   F3 инфо   F10 выход");
+               L"↑↓/колесо   Enter или клик — открыть   F3 инфо   F10 выход",
+               &s.update);
 }
 
 void RenderCerts(Canvas& cv, const State& s) {
@@ -309,7 +319,7 @@ void RenderCerts(Canvas& cv, const State& s) {
     DrawWindow(cv, L"Токены › " + t.title, L"");
     if (t.certIdx.empty()) {
         cv.Text(W / 2 - 20, H / 2, L"На этом носителе нет сертификатов.", A_DIM);
-        DrawFooter(cv, L"Esc назад   F10 выход");
+        DrawFooter(cv, L"Esc назад   F10 выход", &s.update);
         return;
     }
     int y = 2;
@@ -352,7 +362,8 @@ void RenderCerts(Canvas& cv, const State& s) {
     }
     DrawFooter(cv,
                L"↑↓   F5 копировать   F6 переименовать   F7 починить   "
-               L"F3 инфо   Esc назад   F10 выход");
+               L"F3 инфо   Esc назад   F10 выход",
+               &s.update);
 }
 
 void DrawDialog(Canvas& cv, int x, int y, int w, int h,
@@ -502,7 +513,8 @@ void RenderResult(Canvas& cv, const State& s) {
         cv.Text(cDest + 24, y, r.status, r.ok ? A_ACC : A_DIM);
         y += 1;
     }
-    DrawFooter(cv, L"Enter / Esc — к списку сертификатов   F10 выход");
+    DrawFooter(cv, L"Enter / Esc — к списку сертификатов   F10 выход",
+               &s.update);
 }
 
 void RenderExit(Canvas& cv, const State& s) {
@@ -738,6 +750,7 @@ struct Console {
 struct ScanJob {
     std::mutex mtx;
     std::vector<ContainerInfo> items;  // наполняется прогрессивно
+    UpdateInfo update;                 // проверка обновления (в конце скана)
 };
 DWORD WINAPI ScanThreadProc(LPVOID p) {
     ScanJob* j = static_cast<ScanJob*>(p);
@@ -747,8 +760,15 @@ DWORD WINAPI ScanThreadProc(LPVOID p) {
         j->items.push_back(c);
     });
     // Уточнение типа носителя - после (нужен полный набор).
+    {
+        std::lock_guard<std::mutex> lk(j->mtx);
+        RefineMediumByScan(&j->items);
+    }
+    // Заодно тихо спросим GitHub про свежую версию (короткий таймаут, офлайн
+    // просто ничего не покажет). Вне mutex - сеть может подвиснуть.
+    UpdateInfo u = CheckForUpdate(kVersion);
     std::lock_guard<std::mutex> lk(j->mtx);
-    RefineMediumByScan(&j->items);
+    j->update = u;
     return 0;
 }
 
@@ -790,6 +810,9 @@ void DoCopy(State& s, bool overwrite) {
         row.ok = br.ok;
         row.status = br.ok ? L"Успешно" : br.skipped ? L"Пропущено" : L"Ошибка";
         if (br.ok && clr) s.resultMsg += L"  (признак снят)";
+        if (!br.ok && !br.skipped && d.kind == DEST_REGISTRY &&
+            !IsProcessElevated())
+            s.resultMsg += L"   (F9 — перезапустить от администратора)";
     }
     s.log.push_back(row);
     s.modal = Modal::Result;
@@ -964,9 +987,11 @@ int RunTui() {
         env = ProbeEnvironment();
     };
     while (rtMissing() || svcDown()) {
+        bool elevated = IsProcessElevated();
         std::wstring hint;
         if (rtMissing()) hint += L"[D] установить rtComLite   ";
         if (svcDown()) hint += L"[S] запустить службу смарт-карт   ";
+        if (!elevated) hint += L"[A] от администратора   ";
         hint += L"[Enter] продолжить   [F10] выход";
         RenderEnvironment(cv, env, hint);
         con.Present(cv);
@@ -977,18 +1002,29 @@ int RunTui() {
         WORD vk = rec.Event.KeyEvent.wVirtualKeyCode;
         if (vk == VK_F10) { con.Restore(); return 0; }
         if (vk == VK_RETURN) break;
+        if ((vk == 'A' || vk == 'S') && svcDown() && !elevated) {
+            // Служба без прав не стартует — перезапуск с запросом UAC.
+            RenderEnvironment(cv, env, L"Перезапуск с правами администратора…");
+            con.Present(cv);
+            if (RelaunchAsAdmin()) { con.Restore(); return 0; }
+            afterAction(L"Не удалось запросить права (UAC отклонён?).");
+        } else if (vk == 'A' && !elevated) {
+            RenderEnvironment(cv, env, L"Перезапуск с правами администратора…");
+            con.Present(cv);
+            if (RelaunchAsAdmin()) { con.Restore(); return 0; }
+            afterAction(L"Не удалось запросить права.");
+        } else if (vk == 'S' && svcDown()) {
+            std::wstring st;
+            RenderEnvironment(cv, env, L"Запускаю службу смарт-карт…");
+            con.Present(cv);
+            StartSmartCardService(&st);
+            afterAction(st);
+        }
         if (vk == 'D' && rtMissing()) {
             std::wstring st;
             RenderEnvironment(cv, env, L"Скачиваю и запускаю установщик rtComLite…");
             con.Present(cv);
             InstallRtComLite(&st);
-            afterAction(st);
-        }
-        if (vk == 'S' && svcDown()) {
-            std::wstring st;
-            RenderEnvironment(cv, env, L"Запускаю службу смарт-карт…");
-            con.Present(cv);
-            StartSmartCardService(&st);
             afterAction(st);
         }
     }
@@ -1025,6 +1061,7 @@ int RunTui() {
     {
         std::lock_guard<std::mutex> lk(job.mtx);
         s.items = std::move(job.items);
+        s.update = job.update;
     }
     s.toks = BuildTokens(s.items);
     // Назначения копирования: съёмные диски (флешки) + реестр + папки.
@@ -1153,6 +1190,12 @@ int RunTui() {
         // F10 - выход из любого основного экрана.
         if (vk == VK_F10) { s.modal = Modal::Exit; s.exitCursor = 0; continue; }
         if (vk == VK_F3) { s.modal = Modal::Info; continue; }
+        // F9 - перезапуск с правами администратора (нужно для копии в реестр
+        // и запуска службы). Если уже админ - ничего не делаем.
+        if (vk == VK_F9) {
+            if (!IsProcessElevated() && RelaunchAsAdmin()) running = false;
+            continue;
+        }
 
         if (s.screen == Screen::Tokens) {
             int n = static_cast<int>(s.toks.size());

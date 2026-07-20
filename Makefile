@@ -37,7 +37,7 @@ CXX      ?= i686-w64-mingw32-g++
 CXXFLAGS := -std=c++17 -O2 -Wall -Wextra -MMD -MP \
             -D_WIN32_WINNT=0x0601 -DWINVER=0x0601
 LDFLAGS  := -static -static-libgcc -static-libstdc++
-LDLIBS   := -lcrypt32 -ladvapi32 -lwinscard -lole32 -loleaut32 -luuid -lurlmon
+LDLIBS   := -lcrypt32 -ladvapi32 -lwinscard -lole32 -loleaut32 -luuid -lurlmon -lwinhttp -lshell32
 
 SRCDIR   := src
 BUILDDIR := build

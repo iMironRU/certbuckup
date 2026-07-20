@@ -59,4 +59,27 @@ bool InstallRtComLite(std::wstring* status);
 // прав администратора. status - краткий итог для показа. true, если запущена.
 bool StartSmartCardService(std::wstring* status);
 
+// --- Повышение прав (UAC) ---------------------------------------------------
+
+// Запущен ли процесс с правами администратора.
+bool IsProcessElevated();
+
+// Перезапускает эту же программу с запросом прав администратора (диалог UAC).
+// true, если перезапуск инициирован - тогда текущий процесс надо закрыть.
+bool RelaunchAsAdmin();
+
+// --- Проверка обновления на GitHub ------------------------------------------
+
+struct UpdateInfo {
+    bool checked = false;  // проверка выполнена (была сеть и ответ)
+    bool newer = false;    // на GitHub версия новее текущей
+    std::wstring latest;   // тег последнего релиза, напр. "v0.3.1"
+    std::wstring url;      // страница релизов
+};
+
+// Спрашивает у GitHub последний релиз репозитория и сравнивает с current
+// (напр. "0.3.0"). Тихо возвращает checked=false при отсутствии сети. Короткий
+// таймаут; вызывать в фоне.
+UpdateInfo CheckForUpdate(const std::wstring& currentVersion);
+
 }  // namespace certmig

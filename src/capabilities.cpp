@@ -3,6 +3,10 @@
 #include <windows.h>
 #include <winscard.h>
 #include <urlmon.h>
+#include <shellapi.h>
+#include <winhttp.h>
+
+#include <string>
 
 #include "resolver.h"
 
@@ -295,6 +299,143 @@ bool StartSmartCardService(std::wstring* status) {
     CloseServiceHandle(svc);
     CloseServiceHandle(scm);
     return ok;
+}
+
+bool IsProcessElevated() {
+    HANDLE tok = nullptr;
+    if (!OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &tok)) return false;
+    TOKEN_ELEVATION el;
+    DWORD cb = sizeof(el);
+    bool elevated = false;
+    if (GetTokenInformation(tok, TokenElevation, &el, sizeof(el), &cb))
+        elevated = el.TokenIsElevated != 0;
+    CloseHandle(tok);
+    return elevated;
+}
+
+bool RelaunchAsAdmin() {
+    wchar_t path[MAX_PATH];
+    if (GetModuleFileNameW(nullptr, path, MAX_PATH) == 0) return false;
+    SHELLEXECUTEINFOW sei;
+    ZeroMemory(&sei, sizeof(sei));
+    sei.cbSize = sizeof(sei);
+    sei.lpVerb = L"runas";  // запрос UAC
+    sei.lpFile = path;
+    sei.nShow = SW_SHOWNORMAL;
+    return ShellExecuteExW(&sei) != FALSE;
+}
+
+namespace {
+
+// HTTPS GET через WinHTTP. Пустая строка при любой ошибке/офлайне.
+std::string HttpsGet(const wchar_t* host, const wchar_t* path, DWORD timeoutMs) {
+    std::string body;
+    HINTERNET s = WinHttpOpen(L"CertBuckUp-update-check",
+                              WINHTTP_ACCESS_TYPE_DEFAULT_PROXY,
+                              WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
+    if (!s) return body;
+    WinHttpSetTimeouts(s, timeoutMs, timeoutMs, timeoutMs, timeoutMs);
+    HINTERNET c = WinHttpConnect(s, host, INTERNET_DEFAULT_HTTPS_PORT, 0);
+    if (c) {
+        HINTERNET r = WinHttpOpenRequest(c, L"GET", path, nullptr,
+                                         WINHTTP_NO_REFERER,
+                                         WINHTTP_DEFAULT_ACCEPT_TYPES,
+                                         WINHTTP_FLAG_SECURE);
+        if (r) {
+            if (WinHttpSendRequest(r, WINHTTP_NO_ADDITIONAL_HEADERS, 0,
+                                   WINHTTP_NO_REQUEST_DATA, 0, 0, 0) &&
+                WinHttpReceiveResponse(r, nullptr)) {
+                for (;;) {
+                    DWORD avail = 0;
+                    if (!WinHttpQueryDataAvailable(r, &avail) || avail == 0) break;
+                    std::string buf(avail, '\0');
+                    DWORD rd = 0;
+                    if (!WinHttpReadData(r, &buf[0], avail, &rd) || rd == 0) break;
+                    buf.resize(rd);
+                    body += buf;
+                    if (body.size() > 200000) break;  // защита от гигантского тела
+                }
+            }
+            WinHttpCloseHandle(r);
+        }
+        WinHttpCloseHandle(c);
+    }
+    WinHttpCloseHandle(s);
+    return body;
+}
+
+// Разбор "x.y.z" в три числа. Хвост (напр. "-rc1") игнорируется.
+void ParseVer(const std::string& v, int out[3]) {
+    out[0] = out[1] = out[2] = 0;
+    int idx = 0, cur = 0;
+    bool any = false;
+    for (char ch : v) {
+        if (ch >= '0' && ch <= '9') {
+            cur = cur * 10 + (ch - '0');
+            any = true;
+        } else if (ch == '.') {
+            if (idx < 2) out[idx] = cur;
+            ++idx;
+            cur = 0;
+            if (idx > 2) break;
+        } else {
+            break;  // конец числовой части
+        }
+    }
+    if (any && idx <= 2) out[idx] = cur;
+}
+
+bool VersionGreater(const std::string& a, const std::string& b) {
+    int va[3], vb[3];
+    ParseVer(a, va);
+    ParseVer(b, vb);
+    for (int i = 0; i < 3; ++i) {
+        if (va[i] != vb[i]) return va[i] > vb[i];
+    }
+    return false;
+}
+
+std::wstring Widen(const std::string& s) {
+    int n = MultiByteToWideChar(CP_UTF8, 0, s.c_str(), -1, nullptr, 0);
+    std::wstring w(n > 0 ? n - 1 : 0, L'\0');
+    if (n > 0) MultiByteToWideChar(CP_UTF8, 0, s.c_str(), -1, &w[0], n);
+    return w;
+}
+
+std::string Narrow(const std::wstring& s) {
+    int n = WideCharToMultiByte(CP_UTF8, 0, s.c_str(), -1, nullptr, 0, nullptr,
+                                nullptr);
+    std::string a(n > 0 ? n - 1 : 0, '\0');
+    if (n > 0)
+        WideCharToMultiByte(CP_UTF8, 0, s.c_str(), -1, &a[0], n, nullptr, nullptr);
+    return a;
+}
+
+}  // namespace
+
+UpdateInfo CheckForUpdate(const std::wstring& currentVersion) {
+    UpdateInfo u;
+    std::string json = HttpsGet(L"api.github.com",
+                                L"/repos/iMironRU/certbuckup/releases/latest",
+                                4000);
+    if (json.empty()) return u;  // офлайн / ошибка — тихо
+    size_t p = json.find("\"tag_name\"");
+    if (p == std::string::npos) { u.checked = true; return u; }
+    p = json.find(':', p);
+    if (p == std::string::npos) { u.checked = true; return u; }
+    p = json.find('"', p);
+    if (p == std::string::npos) { u.checked = true; return u; }
+    size_t q = json.find('"', p + 1);
+    if (q == std::string::npos) { u.checked = true; return u; }
+    std::string tag = json.substr(p + 1, q - p - 1);  // напр. "v0.3.1"
+    std::string ver = tag;
+    if (!ver.empty() && (ver[0] == 'v' || ver[0] == 'V')) ver = ver.substr(1);
+
+    u.checked = true;
+    u.latest = Widen(tag);
+    u.newer = VersionGreater(ver, Narrow(currentVersion));
+    u.url = L"https://github.com/iMironRU/certbuckup/releases/latest";
+    return u;
 }
 
 }  // namespace certmig

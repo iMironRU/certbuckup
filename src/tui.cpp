@@ -69,7 +69,7 @@ const WORD A_TAG = Attr(C_BG, C_ACCENT);
 int W = 104, H = 32;
 
 // Версия и репозиторий - показываются в футере и на экране окружения.
-const wchar_t* kVersion = L"0.1.0";
+const wchar_t* kVersion = L"0.2.0";
 const wchar_t* kRepoUrl = L"github.com/iMironRU/certbuckup";        // показ
 const wchar_t* kRepoUrlFull = L"https://github.com/iMironRU/certbuckup";  // ссылка
 
